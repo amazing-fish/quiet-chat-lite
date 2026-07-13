@@ -1,0 +1,1 @@
+export const profileSchema = `CREATE TABLE IF NOT EXISTS user_profiles (user_email TEXT PRIMARY KEY, base_url TEXT NOT NULL, model TEXT NOT NULL, api_key_ciphertext TEXT NOT NULL, api_key_iv TEXT NOT NULL, updated_at TEXT NOT NULL)`;
