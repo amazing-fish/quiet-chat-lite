@@ -64,15 +64,20 @@ export function createSseParser(onEvent) {
 
 export function normalizeTokenUsage(usage) {
   if (!usage || typeof usage !== "object") return null;
-  const promptTokens = Number(usage.prompt_tokens ?? usage.input_tokens);
-  const completionTokens = Number(usage.completion_tokens ?? usage.output_tokens);
-  const explicitTotal = Number(usage.total_tokens);
-  const hasPrompt = Number.isFinite(promptTokens) && promptTokens >= 0;
-  const hasCompletion = Number.isFinite(completionTokens) && completionTokens >= 0;
-  const hasTotal = Number.isFinite(explicitTotal) && explicitTotal >= 0;
+  const readCount = (value) => {
+    if (value === null || value === undefined || value === "") return null;
+    const count = Number(value);
+    return Number.isFinite(count) && count >= 0 ? count : null;
+  };
+  const promptTokens = readCount(usage.prompt_tokens ?? usage.input_tokens);
+  const completionTokens = readCount(usage.completion_tokens ?? usage.output_tokens);
+  const explicitTotal = readCount(usage.total_tokens);
+  const hasPrompt = promptTokens !== null;
+  const hasCompletion = completionTokens !== null;
+  const hasTotal = explicitTotal !== null;
   if (!hasPrompt && !hasCompletion && !hasTotal) return null;
-  const prompt = hasPrompt ? promptTokens : 0;
-  const completion = hasCompletion ? completionTokens : 0;
+  const prompt = promptTokens ?? 0;
+  const completion = completionTokens ?? 0;
   return {
     promptTokens: prompt,
     completionTokens: completion,
