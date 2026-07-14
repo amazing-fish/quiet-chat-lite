@@ -170,15 +170,21 @@ export default function Home() {
 
   useEffect(() => {
     if (!hydrated || conversations.length === 0) return;
-    localStorage.setItem(STORAGE_KEY, serializeLocalState({
-      conversations,
-      activeConversationId,
-      settings,
-    }));
+    const timer = window.setTimeout(() => {
+      localStorage.setItem(STORAGE_KEY, serializeLocalState({
+        conversations,
+        activeConversationId,
+        settings,
+      }));
+    }, 150);
+    return () => window.clearTimeout(timer);
   }, [activeConversationId, conversations, hydrated, settings]);
 
   useEffect(() => {
-    messageEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    messageEndRef.current?.scrollIntoView({
+      behavior: pendingConversationId ? "auto" : "smooth",
+      block: "end",
+    });
   }, [activeConversation?.messages, pendingConversationId]);
 
   function updateConversation(id: string, updater: (conversation: Conversation) => Conversation) {
@@ -221,6 +227,7 @@ export default function Home() {
 
   function clearLocalData() {
     if (!window.confirm("清空本机保存的全部对话和连接设置？")) return;
+    stoppedByUserRef.current = true;
     abortRef.current?.abort();
     localStorage.removeItem(STORAGE_KEY);
     const conversation = createConversation() as Conversation;
