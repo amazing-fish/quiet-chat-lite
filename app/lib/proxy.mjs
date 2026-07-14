@@ -289,6 +289,7 @@ function normalizedUpstreamStream(
   let cancelled = false;
   let cleaned = false;
   let timedOut = false;
+  let providerCompleted = false;
   let idleTimeout;
   const resetIdleTimeout = () => {
     clearTimeout(idleTimeout);
@@ -317,6 +318,7 @@ function normalizedUpstreamStream(
       });
       const parser = createOpenAIStreamParser((event) => {
         const { type, ...data } = event;
+        if (type === "done") providerCompleted = true;
         enqueue(type, data);
       });
 
@@ -327,6 +329,12 @@ function normalizedUpstreamStream(
           if (done) break;
           resetIdleTimeout();
           parser.feed(decoder.decode(value, { stream: true }));
+          if (providerCompleted) {
+            try {
+              await reader.cancel("provider stream completed");
+            } catch {}
+            break;
+          }
         }
         parser.feed(decoder.decode());
         parser.end();
