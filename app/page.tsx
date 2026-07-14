@@ -242,6 +242,7 @@ export default function Home() {
     setConversations([conversation]);
     setActiveConversationId(conversation.id);
     setSettings(DEFAULT_SETTINGS);
+    setHasSavedApiKey(false);
     setDraft("");
     setSettingsError("");
     setPendingConversationId(null);
