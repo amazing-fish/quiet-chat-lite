@@ -349,3 +349,41 @@ test("proxy emits a timeout event when an SSE provider stalls before its first c
   assert.equal(events.at(-1).code, "upstream_timeout");
   assert.equal(events.at(-1).status, 504);
 });
+
+test("proxy closes on upstream DONE even when the provider keeps the connection open", async () => {
+  let cancelled = false;
+  const encoder = new TextEncoder();
+  const handler = createProxyHandler({
+    resolveHostname: publicResolver,
+    timeoutMs: 10,
+    fetchImpl: async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode([
+          'data: {"choices":[{"delta":{"content":"完成"},"finish_reason":"stop"}]}',
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n") + "\n"));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }), { headers: { "content-type": "text/event-stream" } }),
+  });
+
+  const response = await handler(new Request("https://site.example/api/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseUrl: "https://api.example/v1",
+      model: "model-one",
+      apiKey: "secret",
+      messages: [{ role: "user", content: "测试" }],
+    }),
+  }));
+  const events = await readChatEvents(response);
+
+  assert.equal(events.at(-1).type, "done");
+  assert.equal(events.some((event) => event.type === "error"), false);
+  assert.equal(cancelled, true);
+});
