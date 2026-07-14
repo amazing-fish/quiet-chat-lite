@@ -257,3 +257,21 @@ test("direct tool-call streams remain unsupported", async () => {
     /不支持工具调用/,
   );
 });
+
+test("direct timeout remains active while a JSON fallback body is stalled", async () => {
+  await assert.rejects(
+    () => requestChatStreamWithFallback(request, {
+      directTimeoutMs: 10,
+      proxyFetch: async () =>
+        Response.json({ error: { code: "upstream_network" } }, { status: 502 }),
+      directFetch: async (_url, init) => new Response(new ReadableStream({
+        start(controller) {
+          init.signal.addEventListener("abort", () => {
+            controller.error(new DOMException("timed out", "AbortError"));
+          }, { once: true });
+        },
+      }), { headers: { "content-type": "application/json" } }),
+    }),
+    (error) => error instanceof DOMException && error.name === "AbortError",
+  );
+});
