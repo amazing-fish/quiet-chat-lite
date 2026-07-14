@@ -92,6 +92,35 @@ test("proxy streaming emits incremental text and provider usage", async () => {
   assert.doesNotMatch(JSON.stringify(traces), /session-secret/);
 });
 
+test("proxy JSON fallback diagnostics retain the provider's original body", async () => {
+  const rawUpstreamBody = JSON.stringify({
+    choices: [{ message: { content: "兼容响应" } }],
+  });
+  const traces = [];
+  await requestChatStreamWithFallback(request, {
+    proxyFetch: async () => chatEventStream([
+      {
+        type: "meta",
+        responseKind: "json-fallback",
+        upstreamResponse: {
+          status: 200,
+          statusText: "OK",
+          headers: { "content-type": "application/json" },
+          body: rawUpstreamBody,
+        },
+      },
+      { type: "delta", content: "兼容响应" },
+      { type: "done", finishReason: "stop" },
+    ]),
+    onTrace: (trace) => traces.push(trace),
+  });
+
+  const completed = traces.at(-1);
+  assert.equal(completed.response.responseKind, "json-fallback");
+  assert.equal(completed.response.upstreamResponse.body, rawUpstreamBody);
+  assert.doesNotMatch(completed.response.upstreamResponse.body, /event: delta/);
+});
+
 test("direct fallback runs only after the Site proxy validates an upstream network failure", async () => {
   let directRequest;
   const traces = [];
