@@ -24,7 +24,10 @@ function emitTrace(onTrace, trace) {
 function proxyRequestDetails(request) {
   return {
     headers: { "content-type": "application/json" },
-    body: { ...request, apiKey: REDACTED_SECRET },
+    body: {
+      ...request,
+      apiKey: request.apiKey ? REDACTED_SECRET : "[由服务端读取]",
+    },
   };
 }
 
@@ -162,6 +165,17 @@ async function directChatRequest(request, fetchImpl, signal, timeoutMs, traceCon
   }
 }
 
+/**
+ * @param {Record<string, any>} request
+ * @param {{
+ *   proxyFetch?: typeof fetch,
+ *   directFetch?: typeof fetch,
+ *   signal?: AbortSignal,
+ *   directTimeoutMs?: number,
+ *   requestId?: string,
+ *   onTrace?: (trace: any) => void,
+ * }} [options]
+ */
 export async function requestChatWithFallback(
   request,
   {
@@ -222,6 +236,12 @@ export async function requestChatWithFallback(
   if (proxyPayload?.error?.code !== "upstream_network") {
     throw new Error(
       responseErrorMessage(proxyResponse.status || 502, upstreamMessage(proxyPayload)),
+    );
+  }
+
+  if (!request.apiKey?.trim()) {
+    throw new Error(
+      "站点代理暂时无法连接该模型服务。已保存的 API Key 不会返回浏览器，因此未尝试浏览器直连。",
     );
   }
 
