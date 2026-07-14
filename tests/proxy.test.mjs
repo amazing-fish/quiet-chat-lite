@@ -259,3 +259,35 @@ test("proxy preserves the exact upstream error body for diagnostics", async () =
   assert.equal(responseBody.upstreamResponse.headers["set-cookie"], undefined);
   assert.doesNotMatch(JSON.stringify(responseBody), /must-not-leak/);
 });
+
+test("proxy cancels the provider stream when SSE parsing fails", async () => {
+  let cancelReason;
+  const encoder = new TextEncoder();
+  const handler = createProxyHandler({
+    resolveHostname: publicResolver,
+    fetchImpl: async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("data: not-json\n\n"));
+      },
+      cancel(reason) {
+        cancelReason = reason;
+      },
+    }), { headers: { "content-type": "text/event-stream" } }),
+  });
+
+  const response = await handler(new Request("https://site.example/api/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseUrl: "https://api.example/v1",
+      model: "model-one",
+      apiKey: "secret",
+      messages: [{ role: "user", content: "测试" }],
+    }),
+  }));
+  const events = await readChatEvents(response);
+
+  assert.equal(events.at(-1).type, "error");
+  assert.equal(events.at(-1).code, "invalid_upstream_stream");
+  assert.equal(cancelReason?.code, "invalid_upstream_stream");
+});
