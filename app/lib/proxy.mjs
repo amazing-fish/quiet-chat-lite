@@ -407,6 +407,7 @@ export function createProxyHandler({
           signal: controller.signal,
         });
       } catch (error) {
+        clearTimeout(timeout);
         cleanup();
         if (error instanceof DOMException && error.name === "AbortError") {
           throw new ProxyError(504, "upstream_timeout", "上游模型响应超时。");
@@ -416,13 +417,24 @@ export function createProxyHandler({
           "upstream_network",
           "站点服务器无法连接该模型服务；正在尝试浏览器兼容回退。",
         );
-      } finally {
-        clearTimeout(timeout);
       }
 
+      const captureNonStreamResponse = async () => {
+        try {
+          return await captureUpstreamResponse(upstream);
+        } catch (error) {
+          if (controller.signal.aborted) {
+            throw new ProxyError(504, "upstream_timeout", "上游模型响应超时。");
+          }
+          throw error;
+        } finally {
+          clearTimeout(timeout);
+          cleanup();
+        }
+      };
+
       if (!upstream.ok) {
-        cleanup();
-        const upstreamResponse = await captureUpstreamResponse(upstream);
+        const upstreamResponse = await captureNonStreamResponse();
         if (upstream.status === 401 || upstream.status === 403) {
           throw new ProxyError(
             401,
@@ -448,13 +460,13 @@ export function createProxyHandler({
       }
 
       if (isEventStream(upstream.headers)) {
+        clearTimeout(timeout);
         return streamResponse(
           normalizedUpstreamStream(upstream, controller, cleanup, request.signal),
         );
       }
 
-      cleanup();
-      const upstreamResponse = await captureUpstreamResponse(upstream);
+      const upstreamResponse = await captureNonStreamResponse();
       const responsePayload = parseResponseJson(upstreamResponse);
       if (!responsePayload) {
         throw new ProxyError(
