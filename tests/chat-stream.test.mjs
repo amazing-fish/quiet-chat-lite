@@ -5,6 +5,7 @@ import {
   createChatEventParser,
   createOpenAIStreamParser,
   encodeChatEvent,
+  normalizeTokenUsage,
   StreamProtocolError,
 } from "../app/lib/chat-stream.mjs";
 
@@ -106,4 +107,14 @@ test("the normalized site event protocol round-trips metadata, deltas, usage, an
     },
     { type: "done", finishReason: "stop" },
   ]);
+});
+
+test("token usage accepts provider aliases without treating absent values as zero usage", () => {
+  assert.deepEqual(normalizeTokenUsage({ input_tokens: 5, output_tokens: 3 }), {
+    promptTokens: 5,
+    completionTokens: 3,
+    totalTokens: 8,
+    source: "provider",
+  });
+  assert.equal(normalizeTokenUsage({ prompt_tokens: null, completion_tokens: null }), null);
 });
