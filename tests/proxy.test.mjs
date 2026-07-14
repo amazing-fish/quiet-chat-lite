@@ -121,6 +121,99 @@ test("proxy maps a bare public origin to the standard v1 endpoint", async () => 
   assert.equal(upstreamUrl, "https://77code.cn/v1/chat/completions");
 });
 
+test("proxy resolves saved credentials only when the client does not provide a key", async () => {
+  const resolvedRequests = [];
+  const authorizations = [];
+  const handler = createProxyHandler({
+    resolveHostname: publicResolver,
+    resolveCredentials: async (request, payload) => {
+      resolvedRequests.push({ request, payload });
+      return {
+        baseUrl: "https://api.example/v1",
+        model: "model-one",
+        apiKey: "saved-secret",
+      };
+    },
+    fetchImpl: async (_url, init) => {
+      authorizations.push(init.headers.authorization);
+      return Response.json({ choices: [{ message: { content: "你好" } }] });
+    },
+  });
+
+  const createRequest = (apiKey) => new Request("https://site.example/api/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseUrl: "https://api.example/v1",
+      model: "model-one",
+      ...(apiKey === undefined ? {} : { apiKey }),
+      messages: [{ role: "user", content: "测试" }],
+    }),
+  });
+
+  assert.equal((await handler(createRequest(undefined))).status, 200);
+  assert.equal((await handler(createRequest("client-secret"))).status, 200);
+  assert.equal(resolvedRequests.length, 1);
+  assert.equal(resolvedRequests[0].payload.apiKey, undefined);
+  assert.deepEqual(authorizations, ["Bearer saved-secret", "Bearer client-secret"]);
+});
+
+test("proxy never sends a saved key to an unsaved endpoint or model", async () => {
+  let upstreamCalls = 0;
+  const handler = createProxyHandler({
+    resolveHostname: publicResolver,
+    resolveCredentials: async () => ({
+      baseUrl: "https://api.example/v1",
+      model: "model-one",
+      apiKey: "saved-secret",
+    }),
+    fetchImpl: async () => {
+      upstreamCalls += 1;
+      return Response.json({});
+    },
+  });
+  const response = await handler(new Request("https://site.example/api/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseUrl: "https://other.example/v1",
+      model: "model-one",
+      messages: [{ role: "user", content: "测试" }],
+    }),
+  }));
+
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).error.code, "saved_settings_mismatch");
+  assert.equal(upstreamCalls, 0);
+});
+
+test("proxy fails closed when saved credentials cannot be loaded", async () => {
+  let upstreamCalls = 0;
+  const handler = createProxyHandler({
+    resolveHostname: publicResolver,
+    resolveCredentials: async () => {
+      throw new Error("missing encryption secret");
+    },
+    fetchImpl: async () => {
+      upstreamCalls += 1;
+      return Response.json({});
+    },
+  });
+  const response = await handler(new Request("https://site.example/api/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseUrl: "https://api.example/v1",
+      model: "model-one",
+      messages: [{ role: "user", content: "测试" }],
+    }),
+  }));
+
+  assert.equal(response.status, 500);
+  assert.equal((await response.json()).error.code, "saved_credentials_unavailable");
+  assert.equal(upstreamCalls, 0);
+});
+
 test("proxy maps authentication, network, timeout, invalid response, and tool calls", async (t) => {
   const cases = [
     {
