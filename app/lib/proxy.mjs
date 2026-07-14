@@ -267,7 +267,13 @@ function oneShotStream(upstreamResponse, responsePayload) {
   return streamResponse(events.join(""));
 }
 
-function normalizedUpstreamStream(upstream, abortController, cleanup, requestSignal) {
+function normalizedUpstreamStream(
+  upstream,
+  abortController,
+  cleanup,
+  requestSignal,
+  idleTimeoutMs,
+) {
   if (!upstream.body) {
     cleanup();
     throw new ProxyError(
@@ -282,9 +288,19 @@ function normalizedUpstreamStream(upstream, abortController, cleanup, requestSig
   const encoder = new TextEncoder();
   let cancelled = false;
   let cleaned = false;
+  let timedOut = false;
+  let idleTimeout;
+  const resetIdleTimeout = () => {
+    clearTimeout(idleTimeout);
+    idleTimeout = setTimeout(() => {
+      timedOut = true;
+      abortController.abort();
+    }, idleTimeoutMs);
+  };
   const finishCleanup = () => {
     if (cleaned) return;
     cleaned = true;
+    clearTimeout(idleTimeout);
     cleanup();
   };
 
@@ -305,21 +321,29 @@ function normalizedUpstreamStream(upstream, abortController, cleanup, requestSig
       });
 
       try {
+        resetIdleTimeout();
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          resetIdleTimeout();
           parser.feed(decoder.decode(value, { stream: true }));
         }
         parser.feed(decoder.decode());
         parser.end();
       } catch (error) {
         if (!cancelled && !requestSignal.aborted) {
-          const streamError = error instanceof StreamProtocolError
-            ? error
-            : new StreamProtocolError(
-              "upstream_stream_error",
-              "模型服务的流式响应意外中断。",
-            );
+          const streamError = timedOut
+            ? new StreamProtocolError(
+              "upstream_timeout",
+              "上游模型流式响应超时。",
+              504,
+            )
+            : error instanceof StreamProtocolError
+              ? error
+              : new StreamProtocolError(
+                "upstream_stream_error",
+                "模型服务的流式响应意外中断。",
+              );
           abortController.abort(streamError);
           try {
             await reader.cancel(streamError);
@@ -462,7 +486,13 @@ export function createProxyHandler({
       if (isEventStream(upstream.headers)) {
         clearTimeout(timeout);
         return streamResponse(
-          normalizedUpstreamStream(upstream, controller, cleanup, request.signal),
+          normalizedUpstreamStream(
+            upstream,
+            controller,
+            cleanup,
+            request.signal,
+            timeoutMs,
+          ),
         );
       }
 
