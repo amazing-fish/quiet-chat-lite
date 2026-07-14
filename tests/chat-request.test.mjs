@@ -137,6 +137,7 @@ test("direct fallback runs only after the Site proxy validates an upstream netwo
         "[DONE]",
       ]);
     },
+    directTimeoutMs: 10,
     requestId: "request-direct",
     onTrace: (trace) => traces.push(trace),
   });
@@ -156,6 +157,8 @@ test("direct fallback runs only after the Site proxy validates an upstream netwo
   assert.equal(traces.at(-1).state, "success");
   assert.equal(traces.at(-1).request.headers.authorization, "Bearer [已隐藏]");
   assert.doesNotMatch(JSON.stringify(traces), /session-secret/);
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.equal(directRequest.init.signal.aborted, false);
 });
 
 test("a bare OpenAI-compatible origin uses the standard v1 endpoint", async () => {
@@ -300,6 +303,24 @@ test("direct timeout remains active while a JSON fallback body is stalled", asyn
           }, { once: true });
         },
       }), { headers: { "content-type": "application/json" } }),
+    }),
+    (error) => error instanceof DOMException && error.name === "AbortError",
+  );
+});
+
+test("direct timeout remains active until the first SSE chunk arrives", async () => {
+  await assert.rejects(
+    () => requestChatStreamWithFallback(request, {
+      directTimeoutMs: 10,
+      proxyFetch: async () =>
+        Response.json({ error: { code: "upstream_network" } }, { status: 502 }),
+      directFetch: async (_url, init) => new Response(new ReadableStream({
+        start(controller) {
+          init.signal.addEventListener("abort", () => {
+            controller.error(new DOMException("timed out", "AbortError"));
+          }, { once: true });
+        },
+      }), { headers: { "content-type": "text/event-stream" } }),
     }),
     (error) => error instanceof DOMException && error.name === "AbortError",
   );
