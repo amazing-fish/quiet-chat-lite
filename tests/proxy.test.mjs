@@ -319,3 +319,33 @@ test("proxy timeout remains active while a JSON fallback body is stalled", async
   assert.equal(response.status, 504);
   assert.equal((await response.json()).error.code, "upstream_timeout");
 });
+
+test("proxy emits a timeout event when an SSE provider stalls before its first chunk", async () => {
+  const handler = createProxyHandler({
+    resolveHostname: publicResolver,
+    timeoutMs: 10,
+    fetchImpl: async (_url, init) => new Response(new ReadableStream({
+      start(controller) {
+        init.signal.addEventListener("abort", () => {
+          controller.error(new DOMException("timed out", "AbortError"));
+        }, { once: true });
+      },
+    }), { headers: { "content-type": "text/event-stream" } }),
+  });
+
+  const response = await handler(new Request("https://site.example/api/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseUrl: "https://api.example/v1",
+      model: "model-one",
+      apiKey: "secret",
+      messages: [{ role: "user", content: "测试" }],
+    }),
+  }));
+  const events = await readChatEvents(response);
+
+  assert.equal(events.at(-1).type, "error");
+  assert.equal(events.at(-1).code, "upstream_timeout");
+  assert.equal(events.at(-1).status, 504);
+});
