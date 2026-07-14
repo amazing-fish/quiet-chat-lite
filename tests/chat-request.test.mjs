@@ -325,3 +325,30 @@ test("direct timeout remains active until the first SSE chunk arrives", async ()
     (error) => error instanceof DOMException && error.name === "AbortError",
   );
 });
+
+test("direct SSE finishes on DONE even when the provider keeps the connection open", async () => {
+  let cancelled = false;
+  const encoder = new TextEncoder();
+  const result = await requestChatStreamWithFallback(request, {
+    directTimeoutMs: 10,
+    proxyFetch: async () =>
+      Response.json({ error: { code: "upstream_network" } }, { status: 502 }),
+    directFetch: async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode([
+          'data: {"choices":[{"delta":{"content":"完成"},"finish_reason":"stop"}]}',
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n") + "\n"));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }), { headers: { "content-type": "text/event-stream" } }),
+  });
+
+  assert.equal(result.content, "完成");
+  assert.equal(result.finishReason, "stop");
+  assert.equal(cancelled, true);
+});
