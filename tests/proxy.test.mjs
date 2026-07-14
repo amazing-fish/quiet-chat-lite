@@ -6,8 +6,26 @@ import {
   resolveWithDns,
   validateBaseUrl,
 } from "../app/lib/proxy.mjs";
+import { createChatEventParser } from "../app/lib/chat-stream.mjs";
 
 const publicResolver = async () => ["8.8.8.8"];
+
+function openAiStream(payloads) {
+  const body = payloads
+    .map((payload) => `data: ${typeof payload === "string" ? payload : JSON.stringify(payload)}\n\n`)
+    .join("");
+  return new Response(body, {
+    headers: { "content-type": "text/event-stream; charset=utf-8" },
+  });
+}
+
+async function readChatEvents(response) {
+  const events = [];
+  const parser = createChatEventParser((event) => events.push(event));
+  parser.feed(await response.text());
+  parser.end();
+  return events;
+}
 
 test("runtime DNS validation accepts an A-only public hostname", async () => {
   const addresses = await resolveWithDns("77code.cn", {
@@ -51,7 +69,12 @@ test("proxy appends the chat completions path and forwards only the supported re
     resolveHostname: publicResolver,
     fetchImpl: async (url, init) => {
       upstream = { url: String(url), init, body: JSON.parse(init.body) };
-      return Response.json({ choices: [{ message: { content: "你好" } }] });
+      return openAiStream([
+        { choices: [{ delta: { content: "你" } }] },
+        { choices: [{ delta: { content: "好" }, finish_reason: "stop" }] },
+        { choices: [], usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 } },
+        "[DONE]",
+      ]);
     },
   });
 
@@ -83,15 +106,27 @@ test("proxy appends the chat completions path and forwards only the supported re
       { role: "assistant", content: "第一答" },
       { role: "user", content: "第二问" },
     ],
-    stream: false,
+    stream: true,
+    stream_options: { include_usage: true },
   });
-  const responseBody = await response.json();
-  assert.equal(responseBody.content, "你好");
-  assert.equal(responseBody.upstreamResponse.status, 200);
-  assert.equal(
-    responseBody.upstreamResponse.body,
-    JSON.stringify({ choices: [{ message: { content: "你好" } }] }),
-  );
+  assert.match(response.headers.get("content-type"), /^text\/event-stream/);
+  const events = await readChatEvents(response);
+  assert.deepEqual(events.map((event) => event.type), [
+    "meta",
+    "delta",
+    "delta",
+    "usage",
+    "done",
+  ]);
+  assert.equal(events.filter((event) => event.type === "delta").map((event) => event.content).join(""), "你好");
+  assert.deepEqual(events.find((event) => event.type === "usage"), {
+    type: "usage",
+    promptTokens: 8,
+    completionTokens: 2,
+    totalTokens: 10,
+    source: "provider",
+  });
+  assert.equal(events.at(-1).finishReason, "stop");
 });
 
 test("proxy maps a bare public origin to the standard v1 endpoint", async () => {
@@ -119,6 +154,7 @@ test("proxy maps a bare public origin to the standard v1 endpoint", async () => 
 
   assert.equal(response.status, 200);
   assert.equal(upstreamUrl, "https://77code.cn/v1/chat/completions");
+  assert.equal((await readChatEvents(response)).find((event) => event.type === "delta").content, "你好");
 });
 
 test("proxy maps authentication, network, timeout, invalid response, and tool calls", async (t) => {
@@ -222,4 +258,132 @@ test("proxy preserves the exact upstream error body for diagnostics", async () =
   assert.equal(responseBody.upstreamResponse.headers["x-request-id"], "req-raw-1");
   assert.equal(responseBody.upstreamResponse.headers["set-cookie"], undefined);
   assert.doesNotMatch(JSON.stringify(responseBody), /must-not-leak/);
+});
+
+test("proxy cancels the provider stream when SSE parsing fails", async () => {
+  let cancelReason;
+  const encoder = new TextEncoder();
+  const handler = createProxyHandler({
+    resolveHostname: publicResolver,
+    fetchImpl: async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("data: not-json\n\n"));
+      },
+      cancel(reason) {
+        cancelReason = reason;
+      },
+    }), { headers: { "content-type": "text/event-stream" } }),
+  });
+
+  const response = await handler(new Request("https://site.example/api/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseUrl: "https://api.example/v1",
+      model: "model-one",
+      apiKey: "secret",
+      messages: [{ role: "user", content: "测试" }],
+    }),
+  }));
+  const events = await readChatEvents(response);
+
+  assert.equal(events.at(-1).type, "error");
+  assert.equal(events.at(-1).code, "invalid_upstream_stream");
+  assert.equal(cancelReason?.code, "invalid_upstream_stream");
+});
+
+test("proxy timeout remains active while a JSON fallback body is stalled", async () => {
+  const handler = createProxyHandler({
+    resolveHostname: publicResolver,
+    timeoutMs: 10,
+    fetchImpl: async (_url, init) => new Response(new ReadableStream({
+      start(controller) {
+        init.signal.addEventListener("abort", () => {
+          controller.error(new DOMException("timed out", "AbortError"));
+        }, { once: true });
+      },
+    }), { headers: { "content-type": "application/json" } }),
+  });
+
+  const response = await handler(new Request("https://site.example/api/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseUrl: "https://api.example/v1",
+      model: "model-one",
+      apiKey: "secret",
+      messages: [{ role: "user", content: "测试" }],
+    }),
+  }));
+
+  assert.equal(response.status, 504);
+  assert.equal((await response.json()).error.code, "upstream_timeout");
+});
+
+test("proxy emits a timeout event when an SSE provider stalls before its first chunk", async () => {
+  const handler = createProxyHandler({
+    resolveHostname: publicResolver,
+    timeoutMs: 10,
+    fetchImpl: async (_url, init) => new Response(new ReadableStream({
+      start(controller) {
+        init.signal.addEventListener("abort", () => {
+          controller.error(new DOMException("timed out", "AbortError"));
+        }, { once: true });
+      },
+    }), { headers: { "content-type": "text/event-stream" } }),
+  });
+
+  const response = await handler(new Request("https://site.example/api/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseUrl: "https://api.example/v1",
+      model: "model-one",
+      apiKey: "secret",
+      messages: [{ role: "user", content: "测试" }],
+    }),
+  }));
+  const events = await readChatEvents(response);
+
+  assert.equal(events.at(-1).type, "error");
+  assert.equal(events.at(-1).code, "upstream_timeout");
+  assert.equal(events.at(-1).status, 504);
+});
+
+test("proxy closes on upstream DONE even when the provider keeps the connection open", async () => {
+  let cancelled = false;
+  const encoder = new TextEncoder();
+  const handler = createProxyHandler({
+    resolveHostname: publicResolver,
+    timeoutMs: 10,
+    fetchImpl: async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode([
+          'data: {"choices":[{"delta":{"content":"完成"},"finish_reason":"stop"}]}',
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n") + "\n"));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }), { headers: { "content-type": "text/event-stream" } }),
+  });
+
+  const response = await handler(new Request("https://site.example/api/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseUrl: "https://api.example/v1",
+      model: "model-one",
+      apiKey: "secret",
+      messages: [{ role: "user", content: "测试" }],
+    }),
+  }));
+  const events = await readChatEvents(response);
+
+  assert.equal(events.at(-1).type, "done");
+  assert.equal(events.some((event) => event.type === "error"), false);
+  assert.equal(cancelled, true);
 });

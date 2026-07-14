@@ -75,3 +75,29 @@ test("local persistence restores conversations, Base URL, and Model but never AP
     },
   });
 });
+
+test("empty streaming placeholders never persist or enter the next model request", () => {
+  const conversation = createConversation("流式占位", [
+    { id: "m1", role: "user", content: "保留问题" },
+    { id: "pending", role: "assistant", content: "" },
+  ]);
+  const settings = {
+    baseUrl: "https://api.example/v1",
+    model: "chat-model",
+    apiKey: "session-secret",
+  };
+
+  assert.deepEqual(buildChatRequest(conversation, settings).messages, [
+    { role: "user", content: "保留问题" },
+  ]);
+
+  const serialized = serializeLocalState({
+    conversations: [conversation],
+    activeConversationId: conversation.id,
+    settings,
+  });
+  assert.doesNotMatch(serialized, /pending/);
+  assert.deepEqual(hydrateLocalState(serialized).conversations[0].messages, [
+    { id: "m1", role: "user", content: "保留问题" },
+  ]);
+});
