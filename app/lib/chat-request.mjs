@@ -115,6 +115,7 @@ async function consumeEventStream(
   let usage = null;
   let finishReason = null;
   let metadata = null;
+  let completed = false;
 
   const parser = createParser((event) => {
     if (event.type === "meta") metadata = event;
@@ -131,7 +132,10 @@ async function consumeEventStream(
       };
       onUsage?.(usage);
     }
-    if (event.type === "done") finishReason = event.finishReason ?? null;
+    if (event.type === "done") {
+      finishReason = event.finishReason ?? null;
+      completed = true;
+    }
     if (event.type === "error") throw streamFailure(event);
   });
 
@@ -143,6 +147,12 @@ async function consumeEventStream(
       const text = decoder.decode(value, { stream: true });
       rawBody += text;
       parser.feed(text);
+      if (completed) {
+        try {
+          await reader.cancel("stream completed");
+        } catch {}
+        break;
+      }
     }
     const tail = decoder.decode();
     rawBody += tail;
