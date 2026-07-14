@@ -35,6 +35,19 @@ type Settings = {
 };
 type Account = { email: string; name: string };
 type Theme = "light" | "dark";
+type ProfileSummary = {
+  baseUrl: string;
+  model: string;
+  hasApiKey: boolean;
+};
+type ProfileResponse = {
+  user: Account;
+  profile: ProfileSummary | null;
+};
+type SaveProfileResponse = {
+  error?: string;
+  profile?: ProfileSummary;
+};
 
 type RequestTrace = {
   id: string;
@@ -97,6 +110,7 @@ export default function Home() {
   const [pendingConversationId, setPendingConversationId] = useState<string | null>(null);
   const [settingsError, setSettingsError] = useState("");
   const [account, setAccount] = useState<Account | null>(null);
+  const [hasSavedApiKey, setHasSavedApiKey] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [requestTraces, setRequestTraces] = useState<RequestTrace[]>([]);
@@ -151,9 +165,18 @@ export default function Home() {
       setHydrated(true);
       fetch("/api/profile", { cache: "no-store" }).then(async (response) => {
         if (!response.ok) return;
-        const data = await response.json();
+        const data = await response.json() as ProfileResponse;
         setAccount(data.user);
-        if (data.profile) setSettings(data.profile);
+        const profile = data.profile;
+        if (profile) {
+          setSettings((current) => ({
+            ...current,
+            baseUrl: profile.baseUrl,
+            model: profile.model,
+            apiKey: "",
+          }));
+          setHasSavedApiKey(Boolean(profile.hasApiKey));
+        }
       }).catch(() => undefined);
     }, 0);
 
@@ -219,6 +242,7 @@ export default function Home() {
     setConversations([conversation]);
     setActiveConversationId(conversation.id);
     setSettings(DEFAULT_SETTINGS);
+    setHasSavedApiKey(false);
     setDraft("");
     setSettingsError("");
     setPendingConversationId(null);
@@ -229,7 +253,7 @@ export default function Home() {
     const missing = [
       !settings.baseUrl.trim() && "Base URL",
       !settings.model.trim() && "Model",
-      !settings.apiKey.trim() && "API Key",
+      !settings.apiKey.trim() && !hasSavedApiKey && "API Key",
     ].filter(Boolean);
     if (missing.length > 0) {
       setSettingsError(`请填写 ${missing.join("、")}。`);
@@ -246,8 +270,10 @@ export default function Home() {
     setSavingSettings(true);
     try {
       const response = await fetch("/api/profile", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(settings) });
-      const data = await response.json();
+      const data = await response.json() as SaveProfileResponse;
       if (!response.ok) throw new Error(data.error || "保存失败");
+      setHasSavedApiKey(Boolean(data.profile?.hasApiKey));
+      setSettings((current) => ({ ...current, apiKey: "" }));
       setSettingsOpen(false);
     } catch (error) { setSettingsError(error instanceof Error ? error.message : "保存失败"); }
     finally { setSavingSettings(false); }
@@ -335,7 +361,9 @@ export default function Home() {
   }
 
   const settingsReady = Boolean(
-    settings.baseUrl.trim() && settings.model.trim() && settings.apiKey.trim(),
+    settings.baseUrl.trim()
+      && settings.model.trim()
+      && (settings.apiKey.trim() || hasSavedApiKey),
   );
   const isActivePending = Boolean(
     pendingConversationId && pendingConversationId === activeConversationId,
@@ -519,15 +547,19 @@ export default function Home() {
             type="password"
             value={settings.apiKey}
             onChange={(event) => setSettings((current) => ({ ...current, apiKey: event.target.value }))}
-            placeholder="登录后加密保存在个人配置中"
+            placeholder={hasSavedApiKey ? "已保存；留空可保留" : "登录后加密保存在个人配置中"}
             autoComplete="off"
             spellCheck={false}
           />
-          <small>登录后经 AES-GCM 加密保存，换设备也可自动读取</small>
+          <small>
+            {hasSavedApiKey
+              ? "已保存的密钥不会返回浏览器；输入新值可替换"
+              : "登录后经 AES-GCM 加密保存，并只在服务端解密"}
+          </small>
         </label>
         <div className="security-note">
           <strong>安全边界</strong>
-          <p>请求通过 Site 代理转发；代理不记录密钥或消息正文，并拒绝本地、内网及非 HTTPS 目标。</p>
+          <p>请求通过 Site 代理转发；已保存的密钥不返回浏览器，代理拒绝本地、内网及非 HTTPS 目标。</p>
         </div>
         <button
           className="save-settings"

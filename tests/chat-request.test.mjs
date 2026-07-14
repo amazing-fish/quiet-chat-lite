@@ -113,6 +113,31 @@ test("authentication errors never trigger direct fallback", async () => {
   assert.equal(directCalls, 0);
 });
 
+test("server-side credentials never trigger a browser direct fallback", async () => {
+  let directCalls = 0;
+  const traces = [];
+  await assert.rejects(
+    () => requestChatWithFallback(
+      { ...request, apiKey: "" },
+      {
+        proxyFetch: async () => Response.json(
+          { error: { code: "upstream_network", message: "无法连接上游。" } },
+          { status: 502 },
+        ),
+        directFetch: async () => {
+          directCalls += 1;
+          return Response.json({});
+        },
+        onTrace: (trace) => traces.push(trace),
+      },
+    ),
+    /不会返回浏览器/,
+  );
+
+  assert.equal(directCalls, 0);
+  assert.equal(traces[0].request.body.apiKey, "[由服务端读取]");
+});
+
 test("a proxy connection failure without server validation never triggers direct fallback", async () => {
   let directCalls = 0;
   await assert.rejects(

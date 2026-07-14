@@ -32,6 +32,16 @@ test("API Key remains memory-only while allowed local state is persisted", async
   assert.doesNotMatch(page, /localStorage\.(?:setItem|getItem)[^\n]*apiKey/i);
 });
 
+test("clearing local settings also clears the saved-key readiness flag", async () => {
+  const page = await readFile(pageUrl, "utf8");
+  const clearLocalData = page.match(
+    /function clearLocalData\(\) \{[\s\S]*?\n  \}/,
+  )?.[0] ?? "";
+
+  assert.match(clearLocalData, /setSettings\(DEFAULT_SETTINGS\)/);
+  assert.match(clearLocalData, /setHasSavedApiKey\(false\)/);
+});
+
 test("responsive styles provide mobile panels and accessible reduced motion", async () => {
   const css = await readFile(cssUrl, "utf8");
   assert.match(css, /@media\s*\(max-width:\s*760px\)/);

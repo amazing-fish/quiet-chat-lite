@@ -177,10 +177,11 @@ export async function resolvePublicHostname(hostname) {
   return resolveWithDns(hostname);
 }
 
-function readPayload(payload) {
+function readPayload(payload, resolvedApiKey = "") {
   const baseUrl = typeof payload.baseUrl === "string" ? payload.baseUrl.trim() : "";
   const model = typeof payload.model === "string" ? payload.model.trim() : "";
-  const apiKey = typeof payload.apiKey === "string" ? payload.apiKey.trim() : "";
+  const clientApiKey = typeof payload.apiKey === "string" ? payload.apiKey.trim() : "";
+  const apiKey = clientApiKey || resolvedApiKey;
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
 
   if (!baseUrl || !model || !apiKey) {
@@ -206,9 +207,18 @@ function readPayload(payload) {
   return { baseUrl, model, apiKey, messages: normalizedMessages };
 }
 
+/**
+ * @param {{
+ *   fetchImpl?: typeof fetch,
+ *   resolveHostname?: (hostname: string) => Promise<string[]>,
+ *   resolveCredentials?: (request: Request, payload: Record<string, unknown>) => Promise<{baseUrl: string, model: string, apiKey: string} | null | undefined> | {baseUrl: string, model: string, apiKey: string} | null | undefined,
+ *   timeoutMs?: number,
+ * }} [options]
+ */
 export function createProxyHandler({
   fetchImpl = fetch,
   resolveHostname = resolvePublicHostname,
+  resolveCredentials,
   timeoutMs = 30_000,
 } = {}) {
   return async function handleProxyRequest(request) {
@@ -224,7 +234,40 @@ export function createProxyHandler({
       } catch {
         throw new ProxyError(400, "invalid_json", "请求格式无效。");
       }
-      const payload = readPayload(rawPayload);
+      let savedCredentials = null;
+      const clientApiKey = typeof rawPayload?.apiKey === "string"
+        ? rawPayload.apiKey.trim()
+        : "";
+      if (!clientApiKey && typeof resolveCredentials === "function") {
+        try {
+          savedCredentials = await resolveCredentials(request, rawPayload);
+        } catch {
+          throw new ProxyError(
+            500,
+            "saved_credentials_unavailable",
+            "已保存的模型凭据暂时不可用，请稍后重试。",
+          );
+        }
+      }
+      if (savedCredentials) {
+        const requestedBaseUrl = typeof rawPayload?.baseUrl === "string"
+          ? rawPayload.baseUrl.trim()
+          : "";
+        const requestedModel = typeof rawPayload?.model === "string"
+          ? rawPayload.model.trim()
+          : "";
+        if (
+          requestedBaseUrl !== savedCredentials.baseUrl
+          || requestedModel !== savedCredentials.model
+        ) {
+          throw new ProxyError(
+            400,
+            "saved_settings_mismatch",
+            "当前模型设置与已保存凭据不一致，请先保存设置或输入 API Key。",
+          );
+        }
+      }
+      const payload = readPayload(rawPayload, savedCredentials?.apiKey?.trim() || "");
       const endpoint = await validateBaseUrl(payload.baseUrl, resolveHostname);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
