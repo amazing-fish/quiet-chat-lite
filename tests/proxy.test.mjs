@@ -291,3 +291,31 @@ test("proxy cancels the provider stream when SSE parsing fails", async () => {
   assert.equal(events.at(-1).code, "invalid_upstream_stream");
   assert.equal(cancelReason?.code, "invalid_upstream_stream");
 });
+
+test("proxy timeout remains active while a JSON fallback body is stalled", async () => {
+  const handler = createProxyHandler({
+    resolveHostname: publicResolver,
+    timeoutMs: 10,
+    fetchImpl: async (_url, init) => new Response(new ReadableStream({
+      start(controller) {
+        init.signal.addEventListener("abort", () => {
+          controller.error(new DOMException("timed out", "AbortError"));
+        }, { once: true });
+      },
+    }), { headers: { "content-type": "application/json" } }),
+  });
+
+  const response = await handler(new Request("https://site.example/api/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseUrl: "https://api.example/v1",
+      model: "model-one",
+      apiKey: "secret",
+      messages: [{ role: "user", content: "测试" }],
+    }),
+  }));
+
+  assert.equal(response.status, 504);
+  assert.equal((await response.json()).error.code, "upstream_timeout");
+});
