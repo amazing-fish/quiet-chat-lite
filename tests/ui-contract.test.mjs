@@ -23,6 +23,11 @@ test("chat workspace exposes the required conversation and request controls", as
   assert.match(page, /切换到黑夜模式/);
   assert.match(page, /THEME_STORAGE_KEY/);
   assert.match(page, /trace\.state === "error"/);
+  assert.match(page, /requestChatStreamWithFallback/);
+  assert.match(page, /模型正在生成/);
+  assert.match(page, /Provider Token Usage/);
+  assert.match(page, /流式响应/);
+  assert.doesNotMatch(page, /非流式响应/);
 });
 
 test("API Key remains memory-only while allowed local state is persisted", async () => {
@@ -40,4 +45,6 @@ test("responsive styles provide mobile panels and accessible reduced motion", as
   assert.match(css, /\.settings-panel\.is-open/);
   assert.match(css, /html\[data-theme="dark"\]/);
   assert.match(css, /color-scheme:\s*dark/);
+  assert.match(css, /\.message-usage/);
+  assert.match(css, /\.trace-state\.is-streaming/);
 });
