@@ -96,7 +96,11 @@ function streamFailure(event) {
   return error;
 }
 
-async function consumeEventStream(response, createParser, { onDelta, onUsage }) {
+async function consumeEventStream(
+  response,
+  createParser,
+  { onDelta, onUsage, onActivity },
+) {
   if (!response.body) {
     throw new StreamProtocolError(
       "invalid_stream_response",
@@ -135,6 +139,7 @@ async function consumeEventStream(response, createParser, { onDelta, onUsage }) 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      onActivity?.();
       const text = decoder.decode(value, { stream: true });
       rawBody += text;
       parser.feed(text);
@@ -328,7 +333,12 @@ async function directChatStream(request, options, traceContext) {
   const abortFromCaller = () => controller.abort(options.signal?.reason);
   if (options.signal?.aborted) abortFromCaller();
   else options.signal?.addEventListener("abort", abortFromCaller, { once: true });
-  const timeout = setTimeout(() => controller.abort(), options.directTimeoutMs);
+  let timeout;
+  const resetTimeout = () => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => controller.abort(), options.directTimeoutMs);
+  };
+  resetTimeout();
   const url = String(chatCompletionsUrl(request.baseUrl));
   const startedAt = performance.now();
   const trace = {
@@ -365,6 +375,7 @@ async function directChatStream(request, options, traceContext) {
       redirect: "error",
       signal: controller.signal,
     });
+    resetTimeout();
 
     if (!response.ok) {
       const rawBody = await response.text();
@@ -386,11 +397,10 @@ async function directChatStream(request, options, traceContext) {
 
     let result;
     if (isEventStream(response.headers)) {
-      clearTimeout(timeout);
       result = await consumeEventStream(
         response,
         createOpenAIStreamParser,
-        options,
+        { ...options, onActivity: resetTimeout },
       );
     } else {
       const rawBody = await response.text();
@@ -427,6 +437,7 @@ async function directChatStream(request, options, traceContext) {
     });
     throw error;
   } finally {
+    clearTimeout(timeout);
     options.signal?.removeEventListener("abort", abortFromCaller);
   }
 }
