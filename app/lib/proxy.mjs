@@ -1,6 +1,13 @@
 import { promises as dns } from "node:dns";
 
 import { chatCompletionsUrl } from "./chat-endpoint.mjs";
+import {
+  createOpenAIStreamParser,
+  encodeChatEvent,
+  isEventStream,
+  normalizeTokenUsage,
+  StreamProtocolError,
+} from "./chat-stream.mjs";
 
 const MAX_MESSAGES = 100;
 const MAX_CONTENT_LENGTH = 100_000;
@@ -206,6 +213,149 @@ function readPayload(payload) {
   return { baseUrl, model, apiKey, messages: normalizedMessages };
 }
 
+function streamResponse(body) {
+  return new Response(body, {
+    headers: {
+      "cache-control": "no-cache, no-transform",
+      "content-type": "text/event-stream; charset=utf-8",
+      "x-accel-buffering": "no",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+function upstreamMetadata(response) {
+  return {
+    status: response.status,
+    statusText: response.statusText,
+    headers: visibleResponseHeaders(response.headers),
+  };
+}
+
+function oneShotStream(upstreamResponse, responsePayload) {
+  const message = responsePayload?.choices?.[0]?.message;
+  if (message?.tool_calls || message?.function_call) {
+    throw new ProxyError(
+      422,
+      "tool_calls_unsupported",
+      "当前版本不支持工具调用响应。",
+      upstreamResponse,
+    );
+  }
+  if (typeof message?.content !== "string") {
+    throw new ProxyError(
+      502,
+      "invalid_upstream_response",
+      "模型服务返回了无法识别的响应。",
+      upstreamResponse,
+    );
+  }
+
+  const events = [
+    encodeChatEvent("meta", {
+      transport: "proxy",
+      upstreamResponse,
+      responseKind: "json-fallback",
+    }),
+    encodeChatEvent("delta", { content: message.content }),
+  ];
+  const usage = normalizeTokenUsage(responsePayload?.usage);
+  if (usage) events.push(encodeChatEvent("usage", usage));
+  events.push(encodeChatEvent("done", {
+    finishReason: responsePayload?.choices?.[0]?.finish_reason ?? null,
+  }));
+  return streamResponse(events.join(""));
+}
+
+function normalizedUpstreamStream(upstream, abortController, cleanup, requestSignal) {
+  if (!upstream.body) {
+    cleanup();
+    throw new ProxyError(
+      502,
+      "invalid_upstream_response",
+      "模型服务没有返回可读取的响应流。",
+    );
+  }
+
+  const reader = upstream.body.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let cancelled = false;
+  let cleaned = false;
+  const finishCleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    cleanup();
+  };
+
+  return new ReadableStream({
+    async start(controller) {
+      const enqueue = (type, data) => {
+        if (cancelled) return;
+        controller.enqueue(encoder.encode(encodeChatEvent(type, data)));
+      };
+      enqueue("meta", {
+        transport: "proxy",
+        upstreamResponse: upstreamMetadata(upstream),
+        responseKind: "normalized-sse",
+      });
+      const parser = createOpenAIStreamParser((event) => {
+        const { type, ...data } = event;
+        enqueue(type, data);
+      });
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          parser.feed(decoder.decode(value, { stream: true }));
+        }
+        parser.feed(decoder.decode());
+        parser.end();
+      } catch (error) {
+        if (!cancelled && !requestSignal.aborted) {
+          const streamError = error instanceof StreamProtocolError
+            ? error
+            : new StreamProtocolError(
+              "upstream_stream_error",
+              "模型服务的流式响应意外中断。",
+            );
+          enqueue("error", {
+            status: streamError.status,
+            code: streamError.code,
+            message: streamError.message,
+          });
+        }
+      } finally {
+        finishCleanup();
+        try {
+          reader.releaseLock();
+        } catch {}
+        if (!cancelled) {
+          try {
+            controller.close();
+          } catch {}
+        }
+      }
+    },
+    async cancel(reason) {
+      cancelled = true;
+      abortController.abort(reason);
+      finishCleanup();
+      try {
+        await reader.cancel(reason);
+      } catch {}
+    },
+  });
+}
+
+/**
+ * @param {{
+ *   fetchImpl?: typeof fetch,
+ *   resolveHostname?: (hostname: string) => Promise<string[]>,
+ *   timeoutMs?: number,
+ * }} [options]
+ */
 export function createProxyHandler({
   fetchImpl = fetch,
   resolveHostname = resolvePublicHostname,
@@ -227,9 +377,11 @@ export function createProxyHandler({
       const payload = readPayload(rawPayload);
       const endpoint = await validateBaseUrl(payload.baseUrl, resolveHostname);
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
-      const stopOnClientAbort = () => controller.abort();
+      const stopOnClientAbort = () => controller.abort(request.signal.reason);
       request.signal.addEventListener("abort", stopOnClientAbort, { once: true });
+      const cleanup = () =>
+        request.signal.removeEventListener("abort", stopOnClientAbort);
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
       let upstream;
       try {
@@ -238,47 +390,51 @@ export function createProxyHandler({
           headers: {
             authorization: `Bearer ${payload.apiKey}`,
             "content-type": "application/json",
-            accept: "application/json",
+            accept: "text/event-stream, application/json",
             "user-agent": "Quiet-Chat/1.0 (+https://quiet-chat-lite-20260712.jiaoling.chatgpt.site)",
           },
           body: JSON.stringify({
             model: payload.model,
             messages: payload.messages,
-            stream: false,
+            stream: true,
+            stream_options: { include_usage: true },
           }),
           redirect: "error",
           signal: controller.signal,
         });
       } catch (error) {
+        cleanup();
         if (error instanceof DOMException && error.name === "AbortError") {
           throw new ProxyError(504, "upstream_timeout", "上游模型响应超时。");
         }
-        throw new ProxyError(502, "upstream_network", "站点服务器无法连接该模型服务；正在尝试浏览器兼容回退。");
+        throw new ProxyError(
+          502,
+          "upstream_network",
+          "站点服务器无法连接该模型服务；正在尝试浏览器兼容回退。",
+        );
       } finally {
         clearTimeout(timeout);
-        request.signal.removeEventListener("abort", stopOnClientAbort);
       }
 
-      const upstreamResponse = await captureUpstreamResponse(upstream);
-      const responsePayload = parseResponseJson(upstreamResponse);
-
-      if (upstream.status === 401 || upstream.status === 403) {
-        throw new ProxyError(
-          401,
-          "upstream_auth",
-          "鉴权失败，请检查 API Key。",
-          upstreamResponse,
-        );
-      }
-      if (upstream.status === 429) {
-        throw new ProxyError(
-          429,
-          "upstream_rate_limit",
-          "上游服务限流，请稍后重试。",
-          upstreamResponse,
-        );
-      }
       if (!upstream.ok) {
+        cleanup();
+        const upstreamResponse = await captureUpstreamResponse(upstream);
+        if (upstream.status === 401 || upstream.status === 403) {
+          throw new ProxyError(
+            401,
+            "upstream_auth",
+            "鉴权失败，请检查 API Key。",
+            upstreamResponse,
+          );
+        }
+        if (upstream.status === 429) {
+          throw new ProxyError(
+            429,
+            "upstream_rate_limit",
+            "上游服务限流，请稍后重试。",
+            upstreamResponse,
+          );
+        }
         throw new ProxyError(
           502,
           "upstream_error",
@@ -287,6 +443,15 @@ export function createProxyHandler({
         );
       }
 
+      if (isEventStream(upstream.headers)) {
+        return streamResponse(
+          normalizedUpstreamStream(upstream, controller, cleanup, request.signal),
+        );
+      }
+
+      cleanup();
+      const upstreamResponse = await captureUpstreamResponse(upstream);
+      const responsePayload = parseResponseJson(upstreamResponse);
       if (!responsePayload) {
         throw new ProxyError(
           502,
@@ -295,25 +460,7 @@ export function createProxyHandler({
           upstreamResponse,
         );
       }
-      const message = responsePayload?.choices?.[0]?.message;
-      if (message?.tool_calls || message?.function_call) {
-        throw new ProxyError(
-          422,
-          "tool_calls_unsupported",
-          "当前版本不支持工具调用响应。",
-          upstreamResponse,
-        );
-      }
-      if (typeof message?.content !== "string") {
-        throw new ProxyError(
-          502,
-          "invalid_upstream_response",
-          "模型服务返回了无法识别的响应。",
-          upstreamResponse,
-        );
-      }
-
-      return Response.json({ content: message.content, upstreamResponse });
+      return oneShotStream(upstreamResponse, responsePayload);
     } catch (error) {
       if (error instanceof ProxyError) {
         return jsonError(
@@ -327,3 +474,4 @@ export function createProxyHandler({
     }
   };
 }
+
