@@ -297,7 +297,7 @@ async function proxyChatStream(request, options, traceContext) {
           status: upstream?.status ?? response.status,
           statusText: upstream?.statusText ?? response.statusText,
           headers: upstream?.headers ?? visibleResponseHeaders(response.headers),
-          body: result.rawBody,
+          body: typeof upstream?.body === "string" ? upstream.body : result.rawBody,
         },
       },
     });
