@@ -365,10 +365,10 @@ async function directChatStream(request, options, traceContext) {
       redirect: "error",
       signal: controller.signal,
     });
-    clearTimeout(timeout);
 
     if (!response.ok) {
       const rawBody = await response.text();
+      clearTimeout(timeout);
       const payload = parseJsonText(rawBody);
       throw new ChatRequestError(
         responseErrorMessage(response.status, upstreamMessage(payload)),
@@ -386,6 +386,7 @@ async function directChatStream(request, options, traceContext) {
 
     let result;
     if (isEventStream(response.headers)) {
+      clearTimeout(timeout);
       result = await consumeEventStream(
         response,
         createOpenAIStreamParser,
@@ -393,6 +394,7 @@ async function directChatStream(request, options, traceContext) {
       );
     } else {
       const rawBody = await response.text();
+      clearTimeout(timeout);
       const payload = parseJsonText(rawBody);
       result = { ...jsonResult(payload, options), rawBody };
     }
