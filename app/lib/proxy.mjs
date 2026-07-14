@@ -320,6 +320,10 @@ function normalizedUpstreamStream(upstream, abortController, cleanup, requestSig
               "upstream_stream_error",
               "模型服务的流式响应意外中断。",
             );
+          abortController.abort(streamError);
+          try {
+            await reader.cancel(streamError);
+          } catch {}
           enqueue("error", {
             status: streamError.status,
             code: streamError.code,
@@ -474,4 +478,3 @@ export function createProxyHandler({
     }
   };
 }
-
