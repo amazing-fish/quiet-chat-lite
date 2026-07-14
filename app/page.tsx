@@ -9,15 +9,23 @@ import {
   serializeLocalState,
 } from "./lib/chat-state.mjs";
 import { requestErrorMessage } from "./lib/client-errors.mjs";
-import { requestChatWithFallback } from "./lib/chat-request.mjs";
+import { requestChatStreamWithFallback } from "./lib/chat-request.mjs";
 import { randomId } from "./lib/id.mjs";
 
 type MessageRole = "user" | "assistant" | "error";
+
+type TokenUsage = {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  source: "provider";
+};
 
 type Message = {
   id: string;
   role: MessageRole;
   content: string;
+  usage?: TokenUsage;
 };
 
 type Conversation = {
@@ -44,7 +52,7 @@ type RequestTrace = {
   method: string;
   url: string;
   targetUrl: string;
-  state: "pending" | "success" | "error";
+  state: "pending" | "streaming" | "success" | "stopped" | "error";
   durationMs: number;
   status: number | null;
   request: unknown;
@@ -151,7 +159,7 @@ export default function Home() {
       setHydrated(true);
       fetch("/api/profile", { cache: "no-store" }).then(async (response) => {
         if (!response.ok) return;
-        const data = await response.json();
+        const data = await response.json() as { user: Account | null; profile?: Settings };
         setAccount(data.user);
         if (data.profile) setSettings(data.profile);
       }).catch(() => undefined);
@@ -171,7 +179,7 @@ export default function Home() {
 
   useEffect(() => {
     messageEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [activeConversation?.messages.length, pendingConversationId]);
+  }, [activeConversation?.messages, pendingConversationId]);
 
   function updateConversation(id: string, updater: (conversation: Conversation) => Conversation) {
     setConversations((current) =>
@@ -246,7 +254,7 @@ export default function Home() {
     setSavingSettings(true);
     try {
       const response = await fetch("/api/profile", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(settings) });
-      const data = await response.json();
+      const data = await response.json() as { error?: string };
       if (!response.ok) throw new Error(data.error || "保存失败");
       setSettingsOpen(false);
     } catch (error) { setSettingsError(error instanceof Error ? error.message : "保存失败"); }
@@ -261,7 +269,7 @@ export default function Home() {
 
     const userMessage: Message = { id: messageId(), role: "user", content };
     const targetId = activeConversation.id;
-    const nextConversation: Conversation = {
+    const requestConversation: Conversation = {
       ...activeConversation,
       title:
         activeConversation.messages.length === 0 && activeConversation.title === "新对话"
@@ -270,7 +278,16 @@ export default function Home() {
       messages: [...activeConversation.messages, userMessage],
       updatedAt: new Date().toISOString(),
     };
-    updateConversation(targetId, () => nextConversation);
+    const assistantMessageId = messageId();
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      role: "assistant",
+      content: "",
+    };
+    updateConversation(targetId, () => ({
+      ...requestConversation,
+      messages: [...requestConversation.messages, assistantMessage],
+    }));
     setDraft("");
     setPendingConversationId(targetId);
     stoppedByUserRef.current = false;
@@ -278,6 +295,36 @@ export default function Home() {
     abortRef.current = controller;
     const requestId = messageId();
     lastErrorTraceIdRef.current = null;
+    let streamedContent = "";
+    let frameId: number | null = null;
+
+    const updateAssistant = (content: string, usage?: TokenUsage) => {
+      updateConversation(targetId, (conversation) => ({
+        ...conversation,
+        messages: conversation.messages.map((message) =>
+          message.id === assistantMessageId
+            ? { ...message, content, ...(usage ? { usage } : {}) }
+            : message,
+        ),
+        updatedAt: new Date().toISOString(),
+      }));
+    };
+
+    const flushStreamedContent = () => {
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
+      frameId = null;
+      updateAssistant(streamedContent);
+    };
+
+    const removeEmptyAssistant = () => {
+      updateConversation(targetId, (conversation) => ({
+        ...conversation,
+        messages: conversation.messages.filter(
+          (message) => message.id !== assistantMessageId || Boolean(message.content),
+        ),
+        updatedAt: new Date().toISOString(),
+      }));
+    };
 
     const recordTrace = (trace: RequestTrace) => {
       setRequestTraces((current) => {
@@ -290,26 +337,44 @@ export default function Home() {
     };
 
     try {
-      const result = await requestChatWithFallback(
-        buildChatRequest(nextConversation, settings),
-        { signal: controller.signal, requestId, onTrace: recordTrace },
+      const result = await requestChatStreamWithFallback(
+        buildChatRequest(requestConversation, settings),
+        {
+          signal: controller.signal,
+          requestId,
+          onTrace: recordTrace,
+          onDelta: (_delta: string, accumulated: string) => {
+            streamedContent = accumulated;
+            if (frameId === null) {
+              frameId = window.requestAnimationFrame(() => {
+                frameId = null;
+                updateAssistant(streamedContent);
+              });
+            }
+          },
+          onUsage: (usage: TokenUsage) => updateAssistant(streamedContent, usage),
+        },
       );
+      streamedContent = result.content as string;
+      flushStreamedContent();
+      if (result.usage) updateAssistant(streamedContent, result.usage as TokenUsage);
+    } catch (error) {
+      flushStreamedContent();
+      const wasStopped = stoppedByUserRef.current && controller.signal.aborted;
+      if (wasStopped) {
+        removeEmptyAssistant();
+        return;
+      }
+      removeEmptyAssistant();
+      const errorContent = error instanceof Error && error.name !== "AbortError"
+        ? error.message
+        : requestErrorMessage(error, false);
       updateConversation(targetId, (conversation) => ({
         ...conversation,
         messages: [
           ...conversation.messages,
-          { id: messageId(), role: "assistant", content: result.content as string },
+          { id: messageId(), role: "error", content: errorContent },
         ],
-        updatedAt: new Date().toISOString(),
-      }));
-    } catch (error) {
-      const content =
-        error instanceof Error && error.name !== "AbortError"
-          ? error.message
-          : requestErrorMessage(error, stoppedByUserRef.current);
-      updateConversation(targetId, (conversation) => ({
-        ...conversation,
-        messages: [...conversation.messages, { id: messageId(), role: "error", content }],
         updatedAt: new Date().toISOString(),
       }));
       if (lastErrorTraceIdRef.current) {
@@ -442,13 +507,23 @@ export default function Home() {
                   <div className="message-label">
                     {message.role === "user" ? "你" : message.role === "assistant" ? "模型" : "错误"}
                   </div>
-                  <div className="message-content">{message.content}</div>
+                  <div className="message-content">
+                    <div className="message-text">{message.content}</div>
+                    {message.role === "assistant" && message.usage && (
+                      <div className="message-usage" aria-label="Provider Token Usage">
+                        <span>Provider usage</span>
+                        <b>输入 {message.usage.promptTokens}</b>
+                        <b>输出 {message.usage.completionTokens}</b>
+                        <b>合计 {message.usage.totalTokens} tokens</b>
+                      </div>
+                    )}
+                  </div>
                 </article>
               ))}
               {isActivePending && (
                 <div className="waiting-row" role="status">
                   <span /><span /><span />
-                  <b>模型正在思考</b>
+                  <b>模型正在生成</b>
                 </div>
               )}
               <div ref={messageEndRef} />
@@ -473,7 +548,7 @@ export default function Home() {
               <button type="submit" className="send-button" disabled={!draft.trim() || !activeConversation} aria-label="发送消息">发送</button>
             )}
           </div>
-          <p>非流式响应 · 当前会话完整历史会发送给模型</p>
+          <p>流式响应 · Token 数来自模型服务 · 当前会话完整历史会发送给模型</p>
         </form>
       </section>
 
@@ -576,7 +651,7 @@ export default function Home() {
                     <small>{trace.method} {trace.url}</small>
                   </span>
                   <span className="trace-meta">
-                    <b>{trace.status ?? (trace.state === "pending" ? "…" : "ERR")}</b>
+                    <b>{trace.status ?? (["pending", "streaming"].includes(trace.state) ? "…" : trace.state === "stopped" ? "STOP" : "ERR")}</b>
                     <small>{trace.durationMs} ms</small>
                   </span>
                 </button>
