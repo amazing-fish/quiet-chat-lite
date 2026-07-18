@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   createProxyHandler,
+  resolvePublicHostname,
   resolveWithDns,
   validateBaseUrl,
 } from "../app/lib/proxy.mjs";
@@ -18,6 +19,124 @@ test("runtime DNS validation accepts an A-only public hostname", async () => {
   });
 
   assert.deepEqual(addresses, ["77.83.241.109"]);
+});
+
+test("runtime DNS validation ignores CNAME values returned by runtime shims", async () => {
+  const addresses = await resolveWithDns("tunnel.example", {
+    resolve4: async () => ["dd.localhost.run.", "3.208.46.244"],
+    resolve6: async () => {
+      throw new Error("ENODATA");
+    },
+  });
+
+  assert.deepEqual(addresses, ["3.208.46.244"]);
+});
+
+test("runtime DNS validation falls back between public DNS providers", async () => {
+  const queries = [];
+  const addresses = await resolvePublicHostname("tunnel.example", {
+    resolver: {
+      resolve4: async () => ["198.18.0.23"],
+      resolve6: async () => {
+        throw new Error("ENODATA");
+      },
+    },
+    fetchImpl: async (url) => {
+      const requestUrl = new URL(url);
+      queries.push(
+        `${requestUrl.hostname}:${requestUrl.searchParams.get("type")}`,
+      );
+      if (requestUrl.hostname === "cloudflare-dns.com") {
+        throw new Error("TLS failure");
+      }
+      if (requestUrl.searchParams.get("type") === "A") {
+        return Response.json({
+          Status: 0,
+          Answer: [{ type: 1, data: "3.208.46.244" }],
+        });
+      }
+      return Response.json({ Status: 0 });
+    },
+  });
+
+  assert.deepEqual(queries.sort(), [
+    "cloudflare-dns.com:A",
+    "cloudflare-dns.com:AAAA",
+    "dns.google:A",
+    "dns.google:AAAA",
+  ]);
+  assert.deepEqual(addresses, ["3.208.46.244"]);
+});
+
+test("runtime DNS validation falls back when the runtime resolver has no addresses", async () => {
+  const addresses = await resolvePublicHostname("tunnel.example", {
+    resolver: {
+      resolve4: async () => {
+        throw new Error("ENODATA");
+      },
+      resolve6: async () => {
+        throw new Error("ENODATA");
+      },
+    },
+    fetchImpl: async (url) => {
+      const requestUrl = new URL(url);
+      if (requestUrl.searchParams.get("type") === "A") {
+        return Response.json({
+          Status: 0,
+          Answer: [{ type: 1, data: "3.208.46.244" }],
+        });
+      }
+      return Response.json({ Status: 0 });
+    },
+  });
+
+  assert.deepEqual(addresses, ["3.208.46.244"]);
+});
+
+test("runtime DNS validation does not bypass ordinary private addresses", async () => {
+  let publicDnsCalled = false;
+  const resolveHostname = (hostname) =>
+    resolvePublicHostname(hostname, {
+      resolver: {
+        resolve4: async () => ["10.0.0.8"],
+        resolve6: async () => {
+          throw new Error("ENODATA");
+        },
+      },
+      fetchImpl: async () => {
+        publicDnsCalled = true;
+        return Response.json({
+          Status: 0,
+          Answer: [{ type: 1, data: "3.208.46.244" }],
+        });
+      },
+    });
+
+  await assert.rejects(() =>
+    validateBaseUrl("https://private.example/v1", resolveHostname),
+  );
+  assert.equal(publicDnsCalled, false);
+});
+
+test("runtime DNS validation rejects private addresses returned by public DNS", async () => {
+  const resolveHostname = (hostname) =>
+    resolvePublicHostname(hostname, {
+      resolver: {
+        resolve4: async () => ["198.18.0.23"],
+        resolve6: async () => {
+          throw new Error("ENODATA");
+        },
+      },
+      fetchImpl: async () =>
+        Response.json({
+          Status: 0,
+          Answer: [{ type: 1, data: "192.168.1.8" }],
+        }),
+    });
+
+  await assert.rejects(() =>
+    validateBaseUrl("https://rebound.example/v1", resolveHostname),
+  );
 });
 
 test("proxy rejects non-HTTPS, local, private, credentialed, and internally-resolved targets", async () => {

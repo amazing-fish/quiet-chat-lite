@@ -5,6 +5,10 @@ import { chatCompletionsUrl } from "./chat-endpoint.mjs";
 const MAX_MESSAGES = 100;
 const MAX_CONTENT_LENGTH = 100_000;
 const MAX_BODY_LENGTH = 1_000_000;
+const PUBLIC_DNS_ENDPOINTS = [
+  "https://cloudflare-dns.com/dns-query",
+  "https://dns.google/resolve",
+];
 const BLOCKED_HOST_SUFFIXES = [
   ".localhost",
   ".local",
@@ -92,6 +96,15 @@ function isPublicIpv4(address) {
   return true;
 }
 
+function isProxySyntheticIpv4(address) {
+  const parts = ipv4Parts(address);
+  return (
+    parts !== null &&
+    parts[0] === 198 &&
+    (parts[1] === 18 || parts[1] === 19)
+  );
+}
+
 function isPublicIpv6(address) {
   const normalized = address.toLowerCase().split("%")[0];
   const mappedIpv4 = normalized.match(/(?:^|:)ffff:(\d+\.\d+\.\d+\.\d+)$/);
@@ -166,15 +179,63 @@ export async function resolveWithDns(hostname, resolver = dns) {
     resolver.resolve4(hostname),
     resolver.resolve6(hostname),
   ]);
-  const addresses = results.flatMap((result) =>
+  const rawAddresses = results.flatMap((result) =>
     result.status === "fulfilled" ? result.value : [],
+  );
+  const addresses = rawAddresses.filter(
+    (address) => typeof address === "string" && isIpLiteral(address),
   );
   if (addresses.length > 0) return [...new Set(addresses)];
   throw new Error("DNS lookup returned no addresses");
 }
 
-export async function resolvePublicHostname(hostname) {
-  return resolveWithDns(hostname);
+async function resolveWithPublicDns(hostname, fetchImpl = fetch) {
+  const results = await Promise.allSettled(
+    PUBLIC_DNS_ENDPOINTS.flatMap((endpoint) =>
+      ["A", "AAAA"].map(async (type) => {
+        const url = new URL(endpoint);
+        url.searchParams.set("name", hostname);
+        url.searchParams.set("type", type);
+        const response = await fetchImpl(url, {
+          headers: { accept: "application/dns-json" },
+          redirect: "error",
+        });
+        if (!response.ok) throw new Error("Public DNS request failed");
+        const payload = await response.json();
+        if (payload?.Status !== 0 || !Array.isArray(payload.Answer)) return [];
+        const recordType = type === "A" ? 1 : 28;
+        return payload.Answer.filter(
+          (answer) =>
+            answer?.type === recordType && typeof answer.data === "string",
+        ).map((answer) => answer.data);
+      }),
+    ),
+  );
+  const addresses = results
+    .flatMap((result) =>
+      result.status === "fulfilled" ? result.value : [],
+    )
+    .filter((address) => typeof address === "string" && isIpLiteral(address));
+  if (addresses.length > 0) return [...new Set(addresses)];
+  throw new Error("Public DNS lookup returned no addresses");
+}
+
+export async function resolvePublicHostname(
+  hostname,
+  { resolver = dns, fetchImpl = fetch } = {},
+) {
+  let addresses;
+  try {
+    addresses = await resolveWithDns(hostname, resolver);
+  } catch {
+    return resolveWithPublicDns(hostname, fetchImpl);
+  }
+  // Proxy/TUN DNS can represent public hosts with reserved 198.18/15 addresses.
+  // Recheck only that exact synthetic range; ordinary private DNS stays blocked.
+  if (addresses.every(isProxySyntheticIpv4)) {
+    return resolveWithPublicDns(hostname, fetchImpl);
+  }
+  return addresses;
 }
 
 function readPayload(payload) {
