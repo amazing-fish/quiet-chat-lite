@@ -106,16 +106,64 @@ function isProxySyntheticIpv4(address) {
   );
 }
 
+function ipv6Parts(address) {
+  if (typeof address !== "string") return null;
+  let normalized = address.toLowerCase().split("%")[0];
+
+  if (normalized.includes(".")) {
+    const tailIndex = normalized.lastIndexOf(":");
+    const mappedParts = ipv4Parts(normalized.slice(tailIndex + 1));
+    if (tailIndex < 0 || !mappedParts) return null;
+    const high = ((mappedParts[0] << 8) | mappedParts[1]).toString(16);
+    const low = ((mappedParts[2] << 8) | mappedParts[3]).toString(16);
+    normalized = `${normalized.slice(0, tailIndex)}:${high}:${low}`;
+  }
+
+  const sections = normalized.split("::");
+  if (sections.length > 2) return null;
+  const left = sections[0] ? sections[0].split(":") : [];
+  const right = sections.length === 2 && sections[1]
+    ? sections[1].split(":")
+    : [];
+  const explicit = [...left, ...right];
+  if (explicit.some((part) => !/^[0-9a-f]{1,4}$/.test(part))) return null;
+
+  if (sections.length === 1) {
+    return explicit.length === 8
+      ? explicit.map((part) => Number.parseInt(part, 16))
+      : null;
+  }
+
+  const missing = 8 - explicit.length;
+  if (missing < 1) return null;
+  return [
+    ...left.map((part) => Number.parseInt(part, 16)),
+    ...Array(missing).fill(0),
+    ...right.map((part) => Number.parseInt(part, 16)),
+  ];
+}
+
 function isPublicIpv6(address) {
-  const normalized = address.toLowerCase().split("%")[0];
-  const mappedIpv4 = normalized.match(/(?:^|:)ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mappedIpv4) return isPublicIpv4(mappedIpv4[1]);
-  if (normalized === "::" || normalized === "::1") return false;
-  if (/^(?:fc|fd)/.test(normalized)) return false;
-  if (/^fe[89ab]/.test(normalized)) return false;
-  if (/^ff/.test(normalized)) return false;
-  if (/^2001:db8(?::|$)/.test(normalized)) return false;
-  return /^[0-9a-f:]+$/.test(normalized) && normalized.includes(":");
+  const parts = ipv6Parts(address);
+  if (!parts) return false;
+
+  const mappedIpv4 =
+    parts.slice(0, 5).every((part) => part === 0) &&
+    parts[5] === 0xffff;
+  if (mappedIpv4) {
+    return isPublicIpv4(
+      `${parts[6] >> 8}.${parts[6] & 0xff}.${parts[7] >> 8}.${parts[7] & 0xff}`,
+    );
+  }
+
+  // The deprecated IPv4-compatible ::/96 range is reserved, even when its
+  // low 32 bits resemble a public IPv4 address.
+  if (parts.slice(0, 6).every((part) => part === 0)) return false;
+  if ((parts[0] & 0xfe00) === 0xfc00) return false;
+  if ((parts[0] & 0xffc0) === 0xfe80) return false;
+  if ((parts[0] & 0xff00) === 0xff00) return false;
+  if (parts[0] === 0x2001 && parts[1] === 0x0db8) return false;
+  return true;
 }
 
 export function isPublicIp(address) {

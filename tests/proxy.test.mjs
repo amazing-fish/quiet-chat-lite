@@ -361,6 +361,35 @@ test("proxy rejects non-HTTPS, local, private, credentialed, and internally-reso
   );
 });
 
+test("proxy rejects hexadecimal IPv4-mapped private IPv6 targets", async () => {
+  const mappedPrivateAddresses = [
+    "::ffff:7f00:1",
+    "::ffff:a00:1",
+    "::ffff:a9fe:a9fe",
+    "::ffff:c0a8:108",
+  ];
+
+  for (const address of mappedPrivateAddresses) {
+    await assert.rejects(
+      () => validateBaseUrl(`https://[${address}]/v1`, publicResolver),
+      (error) => error?.code === "unsafe_target",
+    );
+    await assert.rejects(
+      () => validateBaseUrl("https://mapped.example/v1", async () => [address]),
+      (error) => error?.code === "unsafe_target",
+    );
+  }
+
+  const publicMapped = await validateBaseUrl(
+    "https://[::ffff:8.8.8.8]/v1",
+    publicResolver,
+  );
+  assert.equal(
+    publicMapped.href,
+    "https://[::ffff:808:808]/v1/chat/completions",
+  );
+});
+
 test("proxy appends the chat completions path and forwards only the supported request shape", async () => {
   let upstream;
   const handler = createProxyHandler({
