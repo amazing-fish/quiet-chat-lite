@@ -3,11 +3,26 @@ import test from "node:test";
 
 import {
   createProxyHandler,
+  resolvePublicHostname,
   resolveWithDns,
   validateBaseUrl,
 } from "../app/lib/proxy.mjs";
 
 const publicResolver = async () => ["8.8.8.8"];
+
+function proxyRequest({ baseUrl = "https://api.example/v1", signal } = {}) {
+  return new Request("https://site.example/api/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseUrl,
+      model: "model-one",
+      apiKey: "secret",
+      messages: [{ role: "user", content: "测试" }],
+    }),
+    signal,
+  });
+}
 
 test("runtime DNS validation accepts an A-only public hostname", async () => {
   const addresses = await resolveWithDns("77code.cn", {
@@ -18,6 +33,307 @@ test("runtime DNS validation accepts an A-only public hostname", async () => {
   });
 
   assert.deepEqual(addresses, ["77.83.241.109"]);
+});
+
+test("runtime DNS validation ignores CNAME values returned by runtime shims", async () => {
+  const addresses = await resolveWithDns("tunnel.example", {
+    resolve4: async () => ["dd.localhost.run.", "3.208.46.244"],
+    resolve6: async () => {
+      throw new Error("ENODATA");
+    },
+  });
+
+  assert.deepEqual(addresses, ["3.208.46.244"]);
+});
+
+test("runtime DNS validation falls back between public DNS providers", async () => {
+  const queries = [];
+  const addresses = await resolvePublicHostname("tunnel.example", {
+    resolver: {
+      resolve4: async () => ["198.18.0.23"],
+      resolve6: async () => {
+        throw new Error("ENODATA");
+      },
+    },
+    fetchImpl: async (url) => {
+      const requestUrl = new URL(url);
+      queries.push(
+        `${requestUrl.hostname}:${requestUrl.searchParams.get("type")}`,
+      );
+      if (requestUrl.hostname === "cloudflare-dns.com") {
+        throw new Error("TLS failure");
+      }
+      if (requestUrl.searchParams.get("type") === "A") {
+        return Response.json({
+          Status: 0,
+          Answer: [{ type: 1, data: "3.208.46.244" }],
+        });
+      }
+      return Response.json({ Status: 0 });
+    },
+  });
+
+  assert.deepEqual(queries.sort(), [
+    "cloudflare-dns.com:A",
+    "cloudflare-dns.com:AAAA",
+    "dns.google:A",
+    "dns.google:AAAA",
+  ]);
+  assert.deepEqual(addresses, ["3.208.46.244"]);
+});
+
+test("runtime DNS validation falls back when the runtime resolver has no addresses", async () => {
+  const addresses = await resolvePublicHostname("tunnel.example", {
+    resolver: {
+      resolve4: async () => {
+        throw new Error("ENODATA");
+      },
+      resolve6: async () => {
+        throw new Error("ENODATA");
+      },
+    },
+    fetchImpl: async (url) => {
+      const requestUrl = new URL(url);
+      if (requestUrl.searchParams.get("type") === "A") {
+        return Response.json({
+          Status: 0,
+          Answer: [{ type: 1, data: "3.208.46.244" }],
+        });
+      }
+      return Response.json({ Status: 0 });
+    },
+  });
+
+  assert.deepEqual(addresses, ["3.208.46.244"]);
+});
+
+test("runtime DNS validation rechecks mixed synthetic and public addresses", async () => {
+  let publicDnsCalled = false;
+  const addresses = await resolvePublicHostname("tunnel.example", {
+    resolver: {
+      resolve4: async () => ["198.18.0.23"],
+      resolve6: async () => ["2606:4700:4700::1111"],
+    },
+    fetchImpl: async (url) => {
+      publicDnsCalled = true;
+      const requestUrl = new URL(url);
+      if (requestUrl.searchParams.get("type") === "A") {
+        return Response.json({
+          Status: 0,
+          Answer: [{ type: 1, data: "3.208.46.244" }],
+        });
+      }
+      return Response.json({ Status: 0 });
+    },
+  });
+
+  assert.equal(publicDnsCalled, true);
+  assert.deepEqual(addresses, ["3.208.46.244"]);
+});
+
+test("runtime DNS validation does not recheck mixed synthetic and private addresses", async () => {
+  let publicDnsCalled = false;
+  const resolveHostname = (hostname) =>
+    resolvePublicHostname(hostname, {
+      resolver: {
+        resolve4: async () => ["198.18.0.23", "10.0.0.8"],
+        resolve6: async () => {
+          throw new Error("ENODATA");
+        },
+      },
+      fetchImpl: async () => {
+        publicDnsCalled = true;
+        return Response.json({
+          Status: 0,
+          Answer: [{ type: 1, data: "3.208.46.244" }],
+        });
+      },
+    });
+
+  await assert.rejects(
+    () => validateBaseUrl("https://private.example/v1", resolveHostname),
+    (error) => error?.code === "unsafe_target",
+  );
+  assert.equal(publicDnsCalled, false);
+});
+
+test("public DNS fallback stops waiting for stalled providers and keeps completed answers", async () => {
+  const controller = new AbortController();
+  let completedQueryCount = 0;
+  let markCompletedQueries;
+  const completedQueries = new Promise((resolve) => {
+    markCompletedQueries = resolve;
+  });
+  const stalled = new Promise(() => {});
+  const addressesPromise = resolvePublicHostname("tunnel.example", {
+    resolver: {
+      resolve4: async () => ["198.18.0.23"],
+      resolve6: async () => {
+        throw new Error("ENODATA");
+      },
+    },
+    fetchImpl: async (url, init) => {
+      assert.equal(init.signal, controller.signal);
+      const requestUrl = new URL(url);
+      if (
+        requestUrl.hostname === "dns.google" &&
+        requestUrl.searchParams.get("type") === "A"
+      ) {
+        return stalled;
+      }
+      const payload =
+        requestUrl.searchParams.get("type") === "A"
+          ? {
+              Status: 0,
+              Answer: [{ type: 1, data: "3.208.46.244" }],
+            }
+          : { Status: 0 };
+      return {
+        ok: true,
+        async json() {
+          completedQueryCount += 1;
+          if (completedQueryCount === 3) markCompletedQueries();
+          return payload;
+        },
+      };
+    },
+    signal: controller.signal,
+  });
+
+  await completedQueries;
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+
+  assert.deepEqual(await addressesPromise, ["3.208.46.244"]);
+});
+
+test("public DNS fallback fails closed when every provider is aborted", async () => {
+  const controller = new AbortController();
+  let queryCount = 0;
+  let markQueriesStarted;
+  const queriesStarted = new Promise((resolve) => {
+    markQueriesStarted = resolve;
+  });
+  const addressesPromise = resolvePublicHostname("tunnel.example", {
+    resolver: {
+      resolve4: async () => ["198.18.0.23"],
+      resolve6: async () => {
+        throw new Error("ENODATA");
+      },
+    },
+    fetchImpl: async (_url, init) => {
+      assert.equal(init.signal, controller.signal);
+      queryCount += 1;
+      if (queryCount === 4) markQueriesStarted();
+      return new Promise(() => {});
+    },
+    signal: controller.signal,
+  });
+
+  await queriesStarted;
+  controller.abort();
+
+  await assert.rejects(addressesPromise, /Public DNS lookup returned no addresses/);
+});
+
+test("runtime DNS validation does not bypass ordinary private addresses", async () => {
+  let publicDnsCalled = false;
+  const resolveHostname = (hostname) =>
+    resolvePublicHostname(hostname, {
+      resolver: {
+        resolve4: async () => ["10.0.0.8"],
+        resolve6: async () => {
+          throw new Error("ENODATA");
+        },
+      },
+      fetchImpl: async () => {
+        publicDnsCalled = true;
+        return Response.json({
+          Status: 0,
+          Answer: [{ type: 1, data: "3.208.46.244" }],
+        });
+      },
+    });
+
+  await assert.rejects(
+    () => validateBaseUrl("https://private.example/v1", resolveHostname),
+    (error) => error?.code === "unsafe_target",
+  );
+  assert.equal(publicDnsCalled, false);
+});
+
+test("runtime DNS validation rejects private addresses returned by public DNS", async () => {
+  const resolveHostname = (hostname) =>
+    resolvePublicHostname(hostname, {
+      resolver: {
+        resolve4: async () => ["198.18.0.23"],
+        resolve6: async () => {
+          throw new Error("ENODATA");
+        },
+      },
+      fetchImpl: async () =>
+        Response.json({
+          Status: 0,
+          Answer: [{ type: 1, data: "192.168.1.8" }],
+        }),
+    });
+
+  await assert.rejects(
+    () => validateBaseUrl("https://rebound.example/v1", resolveHostname),
+    (error) => error?.code === "unsafe_target",
+  );
+});
+
+test("proxy bounds stalled DNS validation before starting the upstream request", async () => {
+  let upstreamCalled = false;
+  const handler = createProxyHandler({
+    dnsTimeoutMs: 0,
+    resolveHostname: async (_hostname, { signal }) =>
+      new Promise((_, reject) => {
+        const rejectOnAbort = () => reject(signal.reason);
+        if (signal.aborted) rejectOnAbort();
+        else signal.addEventListener("abort", rejectOnAbort, { once: true });
+      }),
+    fetchImpl: async () => {
+      upstreamCalled = true;
+      return Response.json({ choices: [{ message: { content: "unexpected" } }] });
+    },
+  });
+
+  const response = await handler(proxyRequest());
+  const body = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.equal(body.error.code, "dns_validation_failed");
+  assert.equal(upstreamCalled, false);
+});
+
+test("proxy forwards client cancellation to DNS validation", async () => {
+  const requestController = new AbortController();
+  let markResolverStarted;
+  const resolverStarted = new Promise((resolve) => {
+    markResolverStarted = resolve;
+  });
+  const handler = createProxyHandler({
+    dnsTimeoutMs: 30_000,
+    resolveHostname: async (_hostname, { signal }) =>
+      new Promise((_, reject) => {
+        const rejectOnAbort = () => reject(signal.reason);
+        signal.addEventListener("abort", rejectOnAbort, { once: true });
+        markResolverStarted();
+      }),
+  });
+  const responsePromise = handler(
+    proxyRequest({ signal: requestController.signal }),
+  );
+
+  await resolverStarted;
+  requestController.abort();
+  const response = await responsePromise;
+  const body = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.equal(body.error.code, "dns_validation_failed");
 });
 
 test("proxy rejects non-HTTPS, local, private, credentialed, and internally-resolved targets", async () => {
@@ -42,6 +358,35 @@ test("proxy rejects non-HTTPS, local, private, credentialed, and internally-reso
 
   await assert.rejects(() =>
     validateBaseUrl("https://rebind.example/v1", async () => ["10.1.2.3"]),
+  );
+});
+
+test("proxy rejects hexadecimal IPv4-mapped private IPv6 targets", async () => {
+  const mappedPrivateAddresses = [
+    "::ffff:7f00:1",
+    "::ffff:a00:1",
+    "::ffff:a9fe:a9fe",
+    "::ffff:c0a8:108",
+  ];
+
+  for (const address of mappedPrivateAddresses) {
+    await assert.rejects(
+      () => validateBaseUrl(`https://[${address}]/v1`, publicResolver),
+      (error) => error?.code === "unsafe_target",
+    );
+    await assert.rejects(
+      () => validateBaseUrl("https://mapped.example/v1", async () => [address]),
+      (error) => error?.code === "unsafe_target",
+    );
+  }
+
+  const publicMapped = await validateBaseUrl(
+    "https://[::ffff:8.8.8.8]/v1",
+    publicResolver,
+  );
+  assert.equal(
+    publicMapped.href,
+    "https://[::ffff:808:808]/v1/chat/completions",
   );
 });
 
@@ -119,6 +464,72 @@ test("proxy maps a bare public origin to the standard v1 endpoint", async () => 
 
   assert.equal(response.status, 200);
   assert.equal(upstreamUrl, "https://77code.cn/v1/chat/completions");
+});
+
+test("proxy bounds a stalled upstream response body", async () => {
+  const handler = createProxyHandler({
+    resolveHostname: publicResolver,
+    timeoutMs: 0,
+    fetchImpl: async (_url, { signal }) =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            signal.addEventListener(
+              "abort",
+              () => controller.error(signal.reason),
+              { once: true },
+            );
+          },
+        }),
+      ),
+  });
+
+  const outcome = await Promise.race([
+    handler(proxyRequest()),
+    new Promise((resolve) => setTimeout(() => resolve("still-pending"), 100)),
+  ]);
+
+  assert.notEqual(outcome, "still-pending");
+  assert.equal(outcome.status, 504);
+  assert.equal((await outcome.json()).error.code, "upstream_timeout");
+});
+
+test("proxy forwards client cancellation while reading the upstream body", async () => {
+  const requestController = new AbortController();
+  let markBodyStarted;
+  const bodyStarted = new Promise((resolve) => {
+    markBodyStarted = resolve;
+  });
+  const handler = createProxyHandler({
+    resolveHostname: publicResolver,
+    fetchImpl: async (_url, { signal }) =>
+      new Response(
+        new ReadableStream({
+          pull(controller) {
+            signal.addEventListener(
+              "abort",
+              () => controller.error(signal.reason),
+              { once: true },
+            );
+            markBodyStarted();
+          },
+        }),
+      ),
+  });
+  const responsePromise = handler(
+    proxyRequest({ signal: requestController.signal }),
+  );
+
+  await bodyStarted;
+  requestController.abort();
+  const outcome = await Promise.race([
+    responsePromise,
+    new Promise((resolve) => setTimeout(() => resolve("still-pending"), 100)),
+  ]);
+
+  assert.notEqual(outcome, "still-pending");
+  assert.equal(outcome.status, 504);
+  assert.equal((await outcome.json()).error.code, "upstream_timeout");
 });
 
 test("proxy maps authentication, network, timeout, invalid response, and tool calls", async (t) => {
