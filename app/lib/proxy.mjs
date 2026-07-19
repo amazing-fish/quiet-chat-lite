@@ -295,9 +295,15 @@ export async function resolvePublicHostname(
   } catch {
     return resolveWithPublicDns(hostname, fetchImpl, signal);
   }
-  // Proxy/TUN DNS can represent public hosts with reserved 198.18/15 addresses.
-  // Recheck only that exact synthetic range; ordinary private DNS stays blocked.
-  if (addresses.every(isProxySyntheticIpv4)) {
+  // Proxy/TUN DNS can mix reserved 198.18/15 answers with public A/AAAA answers.
+  // Recheck only when every non-synthetic answer is already public; any ordinary
+  // private answer must remain visible to validation and fail closed.
+  if (
+    addresses.some(isProxySyntheticIpv4) &&
+    addresses.every(
+      (address) => isProxySyntheticIpv4(address) || isPublicIp(address),
+    )
+  ) {
     return resolveWithPublicDns(hostname, fetchImpl, signal);
   }
   return addresses;

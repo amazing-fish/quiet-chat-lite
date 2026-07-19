@@ -107,6 +107,56 @@ test("runtime DNS validation falls back when the runtime resolver has no address
   assert.deepEqual(addresses, ["3.208.46.244"]);
 });
 
+test("runtime DNS validation rechecks mixed synthetic and public addresses", async () => {
+  let publicDnsCalled = false;
+  const addresses = await resolvePublicHostname("tunnel.example", {
+    resolver: {
+      resolve4: async () => ["198.18.0.23"],
+      resolve6: async () => ["2606:4700:4700::1111"],
+    },
+    fetchImpl: async (url) => {
+      publicDnsCalled = true;
+      const requestUrl = new URL(url);
+      if (requestUrl.searchParams.get("type") === "A") {
+        return Response.json({
+          Status: 0,
+          Answer: [{ type: 1, data: "3.208.46.244" }],
+        });
+      }
+      return Response.json({ Status: 0 });
+    },
+  });
+
+  assert.equal(publicDnsCalled, true);
+  assert.deepEqual(addresses, ["3.208.46.244"]);
+});
+
+test("runtime DNS validation does not recheck mixed synthetic and private addresses", async () => {
+  let publicDnsCalled = false;
+  const resolveHostname = (hostname) =>
+    resolvePublicHostname(hostname, {
+      resolver: {
+        resolve4: async () => ["198.18.0.23", "10.0.0.8"],
+        resolve6: async () => {
+          throw new Error("ENODATA");
+        },
+      },
+      fetchImpl: async () => {
+        publicDnsCalled = true;
+        return Response.json({
+          Status: 0,
+          Answer: [{ type: 1, data: "3.208.46.244" }],
+        });
+      },
+    });
+
+  await assert.rejects(
+    () => validateBaseUrl("https://private.example/v1", resolveHostname),
+    (error) => error?.code === "unsafe_target",
+  );
+  assert.equal(publicDnsCalled, false);
+});
+
 test("public DNS fallback stops waiting for stalled providers and keeps completed answers", async () => {
   const controller = new AbortController();
   let completedQueryCount = 0;
