@@ -10,6 +10,20 @@ import {
 
 const publicResolver = async () => ["8.8.8.8"];
 
+function proxyRequest({ baseUrl = "https://api.example/v1", signal } = {}) {
+  return new Request("https://site.example/api/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      baseUrl,
+      model: "model-one",
+      apiKey: "secret",
+      messages: [{ role: "user", content: "测试" }],
+    }),
+    signal,
+  });
+}
+
 test("runtime DNS validation accepts an A-only public hostname", async () => {
   const addresses = await resolveWithDns("77code.cn", {
     resolve4: async () => ["77.83.241.109"],
@@ -93,6 +107,85 @@ test("runtime DNS validation falls back when the runtime resolver has no address
   assert.deepEqual(addresses, ["3.208.46.244"]);
 });
 
+test("public DNS fallback stops waiting for stalled providers and keeps completed answers", async () => {
+  const controller = new AbortController();
+  let completedQueryCount = 0;
+  let markCompletedQueries;
+  const completedQueries = new Promise((resolve) => {
+    markCompletedQueries = resolve;
+  });
+  const stalled = new Promise(() => {});
+  const addressesPromise = resolvePublicHostname("tunnel.example", {
+    resolver: {
+      resolve4: async () => ["198.18.0.23"],
+      resolve6: async () => {
+        throw new Error("ENODATA");
+      },
+    },
+    fetchImpl: async (url, init) => {
+      assert.equal(init.signal, controller.signal);
+      const requestUrl = new URL(url);
+      if (
+        requestUrl.hostname === "dns.google" &&
+        requestUrl.searchParams.get("type") === "A"
+      ) {
+        return stalled;
+      }
+      const payload =
+        requestUrl.searchParams.get("type") === "A"
+          ? {
+              Status: 0,
+              Answer: [{ type: 1, data: "3.208.46.244" }],
+            }
+          : { Status: 0 };
+      return {
+        ok: true,
+        async json() {
+          completedQueryCount += 1;
+          if (completedQueryCount === 3) markCompletedQueries();
+          return payload;
+        },
+      };
+    },
+    signal: controller.signal,
+  });
+
+  await completedQueries;
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+
+  assert.deepEqual(await addressesPromise, ["3.208.46.244"]);
+});
+
+test("public DNS fallback fails closed when every provider is aborted", async () => {
+  const controller = new AbortController();
+  let queryCount = 0;
+  let markQueriesStarted;
+  const queriesStarted = new Promise((resolve) => {
+    markQueriesStarted = resolve;
+  });
+  const addressesPromise = resolvePublicHostname("tunnel.example", {
+    resolver: {
+      resolve4: async () => ["198.18.0.23"],
+      resolve6: async () => {
+        throw new Error("ENODATA");
+      },
+    },
+    fetchImpl: async (_url, init) => {
+      assert.equal(init.signal, controller.signal);
+      queryCount += 1;
+      if (queryCount === 4) markQueriesStarted();
+      return new Promise(() => {});
+    },
+    signal: controller.signal,
+  });
+
+  await queriesStarted;
+  controller.abort();
+
+  await assert.rejects(addressesPromise, /Public DNS lookup returned no addresses/);
+});
+
 test("runtime DNS validation does not bypass ordinary private addresses", async () => {
   let publicDnsCalled = false;
   const resolveHostname = (hostname) =>
@@ -112,8 +205,9 @@ test("runtime DNS validation does not bypass ordinary private addresses", async 
       },
     });
 
-  await assert.rejects(() =>
-    validateBaseUrl("https://private.example/v1", resolveHostname),
+  await assert.rejects(
+    () => validateBaseUrl("https://private.example/v1", resolveHostname),
+    (error) => error?.code === "unsafe_target",
   );
   assert.equal(publicDnsCalled, false);
 });
@@ -134,9 +228,62 @@ test("runtime DNS validation rejects private addresses returned by public DNS", 
         }),
     });
 
-  await assert.rejects(() =>
-    validateBaseUrl("https://rebound.example/v1", resolveHostname),
+  await assert.rejects(
+    () => validateBaseUrl("https://rebound.example/v1", resolveHostname),
+    (error) => error?.code === "unsafe_target",
   );
+});
+
+test("proxy bounds stalled DNS validation before starting the upstream request", async () => {
+  let upstreamCalled = false;
+  const handler = createProxyHandler({
+    dnsTimeoutMs: 0,
+    resolveHostname: async (_hostname, { signal }) =>
+      new Promise((_, reject) => {
+        const rejectOnAbort = () => reject(signal.reason);
+        if (signal.aborted) rejectOnAbort();
+        else signal.addEventListener("abort", rejectOnAbort, { once: true });
+      }),
+    fetchImpl: async () => {
+      upstreamCalled = true;
+      return Response.json({ choices: [{ message: { content: "unexpected" } }] });
+    },
+  });
+
+  const response = await handler(proxyRequest());
+  const body = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.equal(body.error.code, "dns_validation_failed");
+  assert.equal(upstreamCalled, false);
+});
+
+test("proxy forwards client cancellation to DNS validation", async () => {
+  const requestController = new AbortController();
+  let markResolverStarted;
+  const resolverStarted = new Promise((resolve) => {
+    markResolverStarted = resolve;
+  });
+  const handler = createProxyHandler({
+    dnsTimeoutMs: 30_000,
+    resolveHostname: async (_hostname, { signal }) =>
+      new Promise((_, reject) => {
+        const rejectOnAbort = () => reject(signal.reason);
+        signal.addEventListener("abort", rejectOnAbort, { once: true });
+        markResolverStarted();
+      }),
+  });
+  const responsePromise = handler(
+    proxyRequest({ signal: requestController.signal }),
+  );
+
+  await resolverStarted;
+  requestController.abort();
+  const response = await responsePromise;
+  const body = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.equal(body.error.code, "dns_validation_failed");
 });
 
 test("proxy rejects non-HTTPS, local, private, credentialed, and internally-resolved targets", async () => {

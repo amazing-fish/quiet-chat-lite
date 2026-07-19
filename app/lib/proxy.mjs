@@ -5,6 +5,7 @@ import { chatCompletionsUrl } from "./chat-endpoint.mjs";
 const MAX_MESSAGES = 100;
 const MAX_CONTENT_LENGTH = 100_000;
 const MAX_BODY_LENGTH = 1_000_000;
+const DEFAULT_DNS_TIMEOUT_MS = 5_000;
 const PUBLIC_DNS_ENDPOINTS = [
   "https://cloudflare-dns.com/dns-query",
   "https://dns.google/resolve",
@@ -127,7 +128,68 @@ function isIpLiteral(hostname) {
   return ipv4Parts(hostname) !== null || hostname.includes(":");
 }
 
-export async function validateBaseUrl(baseUrl, resolveHostname) {
+function abortReason(signal) {
+  return signal?.reason instanceof Error
+    ? signal.reason
+    : new DOMException("Aborted", "AbortError");
+}
+
+function runAbortable(operation, signal) {
+  if (!signal) return Promise.resolve().then(operation);
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+
+  return new Promise((resolve, reject) => {
+    const stopOnAbort = () => {
+      signal.removeEventListener("abort", stopOnAbort);
+      reject(abortReason(signal));
+    };
+    signal.addEventListener("abort", stopOnAbort, { once: true });
+
+    Promise.resolve()
+      .then(() => {
+        if (signal.aborted) throw abortReason(signal);
+        return operation();
+      })
+      .then(
+        (value) => {
+          signal.removeEventListener("abort", stopOnAbort);
+          resolve(value);
+        },
+        (error) => {
+          signal.removeEventListener("abort", stopOnAbort);
+          reject(error);
+        },
+      );
+  });
+}
+
+function createAbortScope(parentSignal, timeoutMs) {
+  const controller = new AbortController();
+  const stopOnParentAbort = () => controller.abort(parentSignal.reason);
+  if (parentSignal.aborted) {
+    stopOnParentAbort();
+  } else {
+    parentSignal.addEventListener("abort", stopOnParentAbort, { once: true });
+  }
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException("Timed out", "AbortError")),
+    timeoutMs,
+  );
+
+  return {
+    signal: controller.signal,
+    dispose() {
+      clearTimeout(timeout);
+      parentSignal.removeEventListener("abort", stopOnParentAbort);
+    },
+  };
+}
+
+export async function validateBaseUrl(
+  baseUrl,
+  resolveHostname,
+  { signal } = {},
+) {
   let url;
   try {
     url = new URL(baseUrl);
@@ -159,7 +221,7 @@ export async function validateBaseUrl(baseUrl, resolveHostname) {
   } else {
     let addresses;
     try {
-      addresses = await resolveHostname(hostname);
+      addresses = await resolveHostname(hostname, { signal });
     } catch {
       throw new ProxyError(400, "dns_validation_failed", "无法验证 Base URL 的公网地址。");
     }
@@ -174,10 +236,10 @@ export async function validateBaseUrl(baseUrl, resolveHostname) {
   return chatCompletionsUrl(url);
 }
 
-export async function resolveWithDns(hostname, resolver = dns) {
+export async function resolveWithDns(hostname, resolver = dns, signal) {
   const results = await Promise.allSettled([
-    resolver.resolve4(hostname),
-    resolver.resolve6(hostname),
+    runAbortable(() => resolver.resolve4(hostname), signal),
+    runAbortable(() => resolver.resolve6(hostname), signal),
   ]);
   const rawAddresses = results.flatMap((result) =>
     result.status === "fulfilled" ? result.value : [],
@@ -189,26 +251,29 @@ export async function resolveWithDns(hostname, resolver = dns) {
   throw new Error("DNS lookup returned no addresses");
 }
 
-async function resolveWithPublicDns(hostname, fetchImpl = fetch) {
+async function resolveWithPublicDns(hostname, fetchImpl = fetch, signal) {
   const results = await Promise.allSettled(
     PUBLIC_DNS_ENDPOINTS.flatMap((endpoint) =>
-      ["A", "AAAA"].map(async (type) => {
-        const url = new URL(endpoint);
-        url.searchParams.set("name", hostname);
-        url.searchParams.set("type", type);
-        const response = await fetchImpl(url, {
-          headers: { accept: "application/dns-json" },
-          redirect: "error",
-        });
-        if (!response.ok) throw new Error("Public DNS request failed");
-        const payload = await response.json();
-        if (payload?.Status !== 0 || !Array.isArray(payload.Answer)) return [];
-        const recordType = type === "A" ? 1 : 28;
-        return payload.Answer.filter(
-          (answer) =>
-            answer?.type === recordType && typeof answer.data === "string",
-        ).map((answer) => answer.data);
-      }),
+      ["A", "AAAA"].map((type) =>
+        runAbortable(async () => {
+          const url = new URL(endpoint);
+          url.searchParams.set("name", hostname);
+          url.searchParams.set("type", type);
+          const response = await fetchImpl(url, {
+            headers: { accept: "application/dns-json" },
+            redirect: "error",
+            signal,
+          });
+          if (!response.ok) throw new Error("Public DNS request failed");
+          const payload = await response.json();
+          if (payload?.Status !== 0 || !Array.isArray(payload.Answer)) return [];
+          const recordType = type === "A" ? 1 : 28;
+          return payload.Answer.filter(
+            (answer) =>
+              answer?.type === recordType && typeof answer.data === "string",
+          ).map((answer) => answer.data);
+        }, signal),
+      ),
     ),
   );
   const addresses = results
@@ -222,18 +287,18 @@ async function resolveWithPublicDns(hostname, fetchImpl = fetch) {
 
 export async function resolvePublicHostname(
   hostname,
-  { resolver = dns, fetchImpl = fetch } = {},
+  { resolver = dns, fetchImpl = fetch, signal } = {},
 ) {
   let addresses;
   try {
-    addresses = await resolveWithDns(hostname, resolver);
+    addresses = await resolveWithDns(hostname, resolver, signal);
   } catch {
-    return resolveWithPublicDns(hostname, fetchImpl);
+    return resolveWithPublicDns(hostname, fetchImpl, signal);
   }
   // Proxy/TUN DNS can represent public hosts with reserved 198.18/15 addresses.
   // Recheck only that exact synthetic range; ordinary private DNS stays blocked.
   if (addresses.every(isProxySyntheticIpv4)) {
-    return resolveWithPublicDns(hostname, fetchImpl);
+    return resolveWithPublicDns(hostname, fetchImpl, signal);
   }
   return addresses;
 }
@@ -270,6 +335,7 @@ function readPayload(payload) {
 export function createProxyHandler({
   fetchImpl = fetch,
   resolveHostname = resolvePublicHostname,
+  dnsTimeoutMs = DEFAULT_DNS_TIMEOUT_MS,
   timeoutMs = 30_000,
 } = {}) {
   return async function handleProxyRequest(request) {
@@ -286,11 +352,17 @@ export function createProxyHandler({
         throw new ProxyError(400, "invalid_json", "请求格式无效。");
       }
       const payload = readPayload(rawPayload);
-      const endpoint = await validateBaseUrl(payload.baseUrl, resolveHostname);
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
-      const stopOnClientAbort = () => controller.abort();
-      request.signal.addEventListener("abort", stopOnClientAbort, { once: true });
+      const dnsScope = createAbortScope(request.signal, dnsTimeoutMs);
+      let endpoint;
+      try {
+        endpoint = await validateBaseUrl(payload.baseUrl, resolveHostname, {
+          signal: dnsScope.signal,
+        });
+      } finally {
+        dnsScope.dispose();
+      }
+
+      const upstreamScope = createAbortScope(request.signal, timeoutMs);
 
       let upstream;
       try {
@@ -308,7 +380,7 @@ export function createProxyHandler({
             stream: false,
           }),
           redirect: "error",
-          signal: controller.signal,
+          signal: upstreamScope.signal,
         });
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") {
@@ -316,8 +388,7 @@ export function createProxyHandler({
         }
         throw new ProxyError(502, "upstream_network", "站点服务器无法连接该模型服务；正在尝试浏览器兼容回退。");
       } finally {
-        clearTimeout(timeout);
-        request.signal.removeEventListener("abort", stopOnClientAbort);
+        upstreamScope.dispose();
       }
 
       const upstreamResponse = await captureUpstreamResponse(upstream);

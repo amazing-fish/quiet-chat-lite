@@ -27,8 +27,10 @@ provider-specific client. Open **Model connection** in the app and set:
 - **API Key** to a downstream key issued by the gateway.
 
 Requests are sent to `{Base URL}/chat/completions`. For security, the hosted
-Site rejects HTTP, localhost, private-network, credentialed, and DNS-rebinding
-targets. Put a path-restricted HTTPS reverse proxy in front of a self-hosted
+Site rejects HTTP, localhost, credentialed URLs, and hosts whose validation-time
+DNS answers contain non-public addresses. The check does not pin DNS answers to
+the later connection, so it does not guarantee protection against DNS
+rebinding. Put a path-restricted HTTPS reverse proxy in front of a self-hosted
 gateway; do not expose its admin API or management UI.
 
 This starter does not use `wrangler.jsonc`.
