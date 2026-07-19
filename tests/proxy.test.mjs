@@ -466,6 +466,72 @@ test("proxy maps a bare public origin to the standard v1 endpoint", async () => 
   assert.equal(upstreamUrl, "https://77code.cn/v1/chat/completions");
 });
 
+test("proxy bounds a stalled upstream response body", async () => {
+  const handler = createProxyHandler({
+    resolveHostname: publicResolver,
+    timeoutMs: 0,
+    fetchImpl: async (_url, { signal }) =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            signal.addEventListener(
+              "abort",
+              () => controller.error(signal.reason),
+              { once: true },
+            );
+          },
+        }),
+      ),
+  });
+
+  const outcome = await Promise.race([
+    handler(proxyRequest()),
+    new Promise((resolve) => setTimeout(() => resolve("still-pending"), 100)),
+  ]);
+
+  assert.notEqual(outcome, "still-pending");
+  assert.equal(outcome.status, 504);
+  assert.equal((await outcome.json()).error.code, "upstream_timeout");
+});
+
+test("proxy forwards client cancellation while reading the upstream body", async () => {
+  const requestController = new AbortController();
+  let markBodyStarted;
+  const bodyStarted = new Promise((resolve) => {
+    markBodyStarted = resolve;
+  });
+  const handler = createProxyHandler({
+    resolveHostname: publicResolver,
+    fetchImpl: async (_url, { signal }) =>
+      new Response(
+        new ReadableStream({
+          pull(controller) {
+            signal.addEventListener(
+              "abort",
+              () => controller.error(signal.reason),
+              { once: true },
+            );
+            markBodyStarted();
+          },
+        }),
+      ),
+  });
+  const responsePromise = handler(
+    proxyRequest({ signal: requestController.signal }),
+  );
+
+  await bodyStarted;
+  requestController.abort();
+  const outcome = await Promise.race([
+    responsePromise,
+    new Promise((resolve) => setTimeout(() => resolve("still-pending"), 100)),
+  ]);
+
+  assert.notEqual(outcome, "still-pending");
+  assert.equal(outcome.status, 504);
+  assert.equal((await outcome.json()).error.code, "upstream_timeout");
+});
+
 test("proxy maps authentication, network, timeout, invalid response, and tool calls", async (t) => {
   const cases = [
     {

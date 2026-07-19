@@ -419,6 +419,7 @@ export function createProxyHandler({
       const upstreamScope = createAbortScope(request.signal, timeoutMs);
 
       let upstream;
+      let upstreamResponse;
       try {
         upstream = await fetchImpl(endpoint, {
           method: "POST",
@@ -436,6 +437,7 @@ export function createProxyHandler({
           redirect: "error",
           signal: upstreamScope.signal,
         });
+        upstreamResponse = await captureUpstreamResponse(upstream);
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") {
           throw new ProxyError(504, "upstream_timeout", "上游模型响应超时。");
@@ -445,7 +447,6 @@ export function createProxyHandler({
         upstreamScope.dispose();
       }
 
-      const upstreamResponse = await captureUpstreamResponse(upstream);
       const responsePayload = parseResponseJson(upstreamResponse);
 
       if (upstream.status === 401 || upstream.status === 403) {
