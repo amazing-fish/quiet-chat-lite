@@ -18,6 +18,9 @@ type TokenUsage = {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  promptCacheHitTokens: number;
+  promptCacheMissTokens: number;
+  promptCacheHitRate: number | null;
   source: "provider";
 };
 
@@ -520,6 +523,15 @@ export default function Home() {
                       <div className="message-usage" aria-label="Provider Token Usage">
                         <span>Provider usage</span>
                         <b>输入 {message.usage.promptTokens}</b>
+                        {message.usage.promptCacheHitTokens > 0 && (
+                          <b>缓存命中 {message.usage.promptCacheHitTokens}</b>
+                        )}
+                        {message.usage.promptCacheMissTokens > 0 && (
+                          <b>缓存未命中 {message.usage.promptCacheMissTokens}</b>
+                        )}
+                        {message.usage.promptCacheHitRate !== null && (
+                          <b>命中率 {(message.usage.promptCacheHitRate * 100).toFixed(1)}%</b>
+                        )}
                         <b>输出 {message.usage.completionTokens}</b>
                         <b>合计 {message.usage.totalTokens} tokens</b>
                       </div>
