@@ -56,6 +56,9 @@ test("proxy streaming emits incremental text and provider usage", async () => {
         promptTokens: 12,
         completionTokens: 2,
         totalTokens: 14,
+        promptCacheHitTokens: 8,
+        promptCacheMissTokens: 4,
+        promptCacheHitRate: 2 / 3,
         source: "provider",
       },
       { type: "done", finishReason: "stop" },
@@ -74,6 +77,9 @@ test("proxy streaming emits incremental text and provider usage", async () => {
     promptTokens: 12,
     completionTokens: 2,
     totalTokens: 14,
+    promptCacheHitTokens: 8,
+    promptCacheMissTokens: 4,
+    promptCacheHitRate: 2 / 3,
     source: "provider",
   }]);
   assert.deepEqual(result, {
@@ -145,6 +151,7 @@ test("direct fallback runs only after the Site proxy validates an upstream netwo
   assert.equal(result.content, "直连成功");
   assert.equal(result.transport, "direct");
   assert.equal(result.usage.totalTokens, 13);
+  assert.equal(result.usage.promptCacheHitTokens, 0);
   assert.equal(directRequest.url, "https://77code.cn/v1/chat/completions");
   assert.equal(directRequest.init.headers.authorization, "Bearer session-secret");
   assert.deepEqual(directRequest.body, {
