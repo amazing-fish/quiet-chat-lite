@@ -16,6 +16,23 @@ npm run dev
 npm run build
 ```
 
+## OpenAI-compatible gateways
+
+Quiet Chat Lite can use Sub2API or another OpenAI-compatible gateway without a
+provider-specific client. Open **Model connection** in the app and set:
+
+- **Base URL** to the gateway's public HTTPS API root, for example
+  `https://gateway.example.com/v1`;
+- **Model** to the model exposed by that gateway, for example `grok-4.5`;
+- **API Key** to a downstream key issued by the gateway.
+
+Requests are sent to `{Base URL}/chat/completions`. For security, the hosted
+Site rejects HTTP, localhost, credentialed URLs, and hosts whose validation-time
+DNS answers contain non-public addresses. The check does not pin DNS answers to
+the later connection, so it does not guarantee protection against DNS
+rebinding. Put a path-restricted HTTPS reverse proxy in front of a self-hosted
+gateway; do not expose its admin API or management UI.
+
 This starter does not use `wrangler.jsonc`.
 
 ## Included Shape
