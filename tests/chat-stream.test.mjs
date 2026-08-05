@@ -46,6 +46,9 @@ test("OpenAI SSE parsing survives UTF-8 and event boundaries", () => {
       promptTokens: 7,
       completionTokens: 2,
       totalTokens: 9,
+      promptCacheHitTokens: 0,
+      promptCacheMissTokens: 0,
+      promptCacheHitRate: null,
       source: "provider",
     },
     { type: "done", finishReason: "stop" },
@@ -90,6 +93,9 @@ test("the normalized site event protocol round-trips metadata, deltas, usage, an
     promptTokens: 4,
     completionTokens: 1,
     totalTokens: 5,
+    promptCacheHitTokens: 3,
+    promptCacheMissTokens: 1,
+    promptCacheHitRate: 0.75,
     source: "provider",
   }));
   parser.feed(encodeChatEvent("done", { finishReason: "stop" }));
@@ -103,17 +109,38 @@ test("the normalized site event protocol round-trips metadata, deltas, usage, an
       promptTokens: 4,
       completionTokens: 1,
       totalTokens: 5,
+      promptCacheHitTokens: 3,
+      promptCacheMissTokens: 1,
+      promptCacheHitRate: 0.75,
       source: "provider",
     },
     { type: "done", finishReason: "stop" },
   ]);
 });
 
-test("token usage accepts provider aliases without treating absent values as zero usage", () => {
+test("token usage accepts provider aliases and DeepSeek cache usage", () => {
   assert.deepEqual(normalizeTokenUsage({ input_tokens: 5, output_tokens: 3 }), {
     promptTokens: 5,
     completionTokens: 3,
     totalTokens: 8,
+    promptCacheHitTokens: 0,
+    promptCacheMissTokens: 0,
+    promptCacheHitRate: null,
+    source: "provider",
+  });
+  assert.deepEqual(normalizeTokenUsage({
+    prompt_tokens: 10,
+    completion_tokens: 2,
+    total_tokens: 12,
+    prompt_cache_hit_tokens: 7,
+    prompt_cache_miss_tokens: 3,
+  }), {
+    promptTokens: 10,
+    completionTokens: 2,
+    totalTokens: 12,
+    promptCacheHitTokens: 7,
+    promptCacheMissTokens: 3,
+    promptCacheHitRate: 0.7,
     source: "provider",
   });
   assert.equal(normalizeTokenUsage({ prompt_tokens: null, completion_tokens: null }), null);
