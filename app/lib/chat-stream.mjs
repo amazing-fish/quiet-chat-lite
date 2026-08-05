@@ -72,16 +72,33 @@ export function normalizeTokenUsage(usage) {
   const promptTokens = readCount(usage.prompt_tokens ?? usage.input_tokens);
   const completionTokens = readCount(usage.completion_tokens ?? usage.output_tokens);
   const explicitTotal = readCount(usage.total_tokens);
+  const promptCacheHitTokens = readCount(
+    usage.prompt_cache_hit_tokens
+      ?? usage.cache_read_input_tokens
+      ?? usage.cached_input_tokens,
+  );
+  const promptCacheMissTokens = readCount(usage.prompt_cache_miss_tokens);
   const hasPrompt = promptTokens !== null;
   const hasCompletion = completionTokens !== null;
   const hasTotal = explicitTotal !== null;
-  if (!hasPrompt && !hasCompletion && !hasTotal) return null;
+  const hasCacheHit = promptCacheHitTokens !== null;
+  const hasCacheMiss = promptCacheMissTokens !== null;
+  if (!hasPrompt && !hasCompletion && !hasTotal && !hasCacheHit && !hasCacheMiss) {
+    return null;
+  }
   const prompt = promptTokens ?? 0;
   const completion = completionTokens ?? 0;
+  const cacheHit = promptCacheHitTokens ?? 0;
+  const cacheMiss = promptCacheMissTokens
+    ?? (hasPrompt && hasCacheHit ? Math.max(0, prompt - cacheHit) : 0);
+  const cacheInput = cacheHit + cacheMiss;
   return {
     promptTokens: prompt,
     completionTokens: completion,
     totalTokens: hasTotal ? explicitTotal : prompt + completion,
+    promptCacheHitTokens: cacheHit,
+    promptCacheMissTokens: cacheMiss,
+    promptCacheHitRate: cacheInput > 0 ? cacheHit / cacheInput : null,
     source: "provider",
   };
 }
