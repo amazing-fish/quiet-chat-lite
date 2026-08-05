@@ -10,6 +10,7 @@ import {
 import { randomId } from "./id.mjs";
 
 const REDACTED_SECRET = "[已隐藏]";
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000;
 
 class ChatRequestError extends Error {
   constructor(message, { allowDirectFallback = false, traceResponse = null } = {}) {
@@ -88,12 +89,23 @@ function upstreamMessage(payload) {
 }
 
 function streamFailure(event) {
-  const error = new StreamProtocolError(
+  return new StreamProtocolError(
     event.code || "stream_error",
     event.message || "流式响应意外中断。",
     event.status || 502,
   );
-  return error;
+}
+
+function usageFromEvent(event) {
+  return {
+    promptTokens: event.promptTokens,
+    completionTokens: event.completionTokens,
+    totalTokens: event.totalTokens,
+    promptCacheHitTokens: event.promptCacheHitTokens ?? 0,
+    promptCacheMissTokens: event.promptCacheMissTokens ?? 0,
+    promptCacheHitRate: event.promptCacheHitRate ?? null,
+    source: event.source || "provider",
+  };
 }
 
 async function consumeEventStream(
@@ -124,12 +136,7 @@ async function consumeEventStream(
       onDelta?.(event.content, content);
     }
     if (event.type === "usage") {
-      usage = {
-        promptTokens: event.promptTokens,
-        completionTokens: event.completionTokens,
-        totalTokens: event.totalTokens,
-        source: event.source || "provider",
-      };
+      usage = usageFromEvent(event);
       onUsage?.(usage);
     }
     if (event.type === "done") {
@@ -471,7 +478,7 @@ export async function requestChatStreamWithFallback(
     proxyFetch = fetch,
     directFetch = fetch,
     signal,
-    directTimeoutMs = 30_000,
+    directTimeoutMs = DEFAULT_STREAM_IDLE_TIMEOUT_MS,
     requestId = randomId(),
     onTrace,
     onDelta,
