@@ -124,6 +124,9 @@ test("proxy appends the chat completions path and forwards only the supported re
     promptTokens: 8,
     completionTokens: 2,
     totalTokens: 10,
+    promptCacheHitTokens: 0,
+    promptCacheMissTokens: 0,
+    promptCacheHitRate: null,
     source: "provider",
   });
   assert.equal(events.at(-1).finishReason, "stop");
