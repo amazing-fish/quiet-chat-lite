@@ -26,6 +26,7 @@ import {
   hasIntentionalTouchMove,
   isNearBottom,
   isScrollAwayKey,
+  shouldResumeFollowingAtBottom,
 } from "./lib/scroll-follow.mjs";
 
 type MessageRole = "user" | "assistant" | "error";
@@ -136,8 +137,10 @@ export default function Home() {
   const lastErrorTraceIdRef = useRef<string | null>(null);
   const messageScrollRef = useRef<HTMLDivElement | null>(null);
   const isFollowingRef = useRef(true);
+  const userPausedFollowingRef = useRef(false);
   const skipNextStreamFollowRef = useRef(false);
   const programmaticScrollUntilRef = useRef(0);
+  const previousScrollTopRef = useRef(0);
   const touchStartYRef = useRef<number | null>(null);
   const scrollPositionsRef = useRef(new Map<string, number>());
   const previousConversationIdRef = useRef<string | null>(null);
@@ -230,8 +233,10 @@ export default function Home() {
     if (previousConversationIdRef.current === activeConversationId) return;
 
     previousConversationIdRef.current = activeConversationId;
+    userPausedFollowingRef.current = false;
     setPromptAnchorMessageId(null);
     const savedTop = scrollPositionsRef.current.get(activeConversationId) ?? 0;
+    previousScrollTopRef.current = savedTop;
     runProgrammaticScroll(() => container.scrollTo({ top: savedTop, behavior: "auto" }));
     updateFollowing(isNearBottom({
       scrollHeight: container.scrollHeight,
@@ -327,6 +332,8 @@ export default function Home() {
     setPendingConversationId(null);
     setSettingsOpen(false);
     setPromptAnchorMessageId(null);
+    userPausedFollowingRef.current = false;
+    previousScrollTopRef.current = 0;
     scrollPositionsRef.current.clear();
     updateFollowing(true);
   }
@@ -383,6 +390,7 @@ export default function Home() {
       role: "assistant",
       content: "",
     };
+    userPausedFollowingRef.current = false;
     setPromptAnchorMessageId(userMessage.id);
     updateFollowing(true);
     updateConversation(targetId, () => ({
@@ -501,6 +509,7 @@ export default function Home() {
   }
 
   function pauseFollowingForUserIntent() {
+    userPausedFollowingRef.current = true;
     programmaticScrollUntilRef.current = 0;
     updateFollowing(false);
   }
@@ -508,10 +517,24 @@ export default function Home() {
   function handleMessageScroll() {
     const container = messageScrollRef.current;
     if (!container) return;
+    const previousScrollTop = previousScrollTopRef.current;
+    previousScrollTopRef.current = container.scrollTop;
     if (activeConversationId) {
       scrollPositionsRef.current.set(activeConversationId, container.scrollTop);
     }
     if (performance.now() < programmaticScrollUntilRef.current) return;
+    if (userPausedFollowingRef.current) {
+      if (shouldResumeFollowingAtBottom({
+        previousScrollTop,
+        scrollTop: container.scrollTop,
+        scrollHeight: container.scrollHeight,
+        clientHeight: container.clientHeight,
+      })) {
+        userPausedFollowingRef.current = false;
+        updateFollowing(true);
+      }
+      return;
+    }
     updateFollowing(isNearBottom(container));
   }
 
@@ -539,6 +562,7 @@ export default function Home() {
   function resumeFollowing() {
     const container = messageScrollRef.current;
     if (!container) return;
+    userPausedFollowingRef.current = false;
     updateFollowing(true);
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     runProgrammaticScroll(() => container.scrollTo({

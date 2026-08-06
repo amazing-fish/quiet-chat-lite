@@ -6,6 +6,7 @@ import {
   hasIntentionalTouchMove,
   isNearBottom,
   isScrollAwayKey,
+  shouldResumeFollowingAtBottom,
 } from "../app/lib/scroll-follow.mjs";
 
 test("short answers remain near the bottom without negative distance", () => {
@@ -33,4 +34,34 @@ test("touch intent ignores jitter and detects a deliberate gesture in either dir
   assert.equal(hasIntentionalTouchMove(300, 296), false);
   assert.equal(hasIntentionalTouchMove(300, 284), true);
   assert.equal(hasIntentionalTouchMove(300, 318), true);
+});
+
+test("an explicit pause survives its own near-bottom scroll event", () => {
+  assert.equal(shouldResumeFollowingAtBottom({
+    previousScrollTop: 950,
+    scrollTop: 930,
+    scrollHeight: 1600,
+    clientHeight: 640,
+  }), false);
+  assert.equal(shouldResumeFollowingAtBottom({
+    previousScrollTop: 960,
+    scrollTop: 960,
+    scrollHeight: 1600,
+    clientHeight: 640,
+  }), false);
+});
+
+test("an explicit pause resumes only after scrolling forward to the actual bottom", () => {
+  assert.equal(shouldResumeFollowingAtBottom({
+    previousScrollTop: 900,
+    scrollTop: 940,
+    scrollHeight: 1600,
+    clientHeight: 640,
+  }), false);
+  assert.equal(shouldResumeFollowingAtBottom({
+    previousScrollTop: 940,
+    scrollTop: 960,
+    scrollHeight: 1600,
+    clientHeight: 640,
+  }), true);
 });
