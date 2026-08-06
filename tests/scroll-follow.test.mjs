@@ -2,13 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   BOTTOM_FOLLOW_THRESHOLD,
+  PROMPT_ANCHOR_OFFSET,
   distanceFromBottom,
   hasIntentionalTouchMove,
   initialConversationScrollTop,
   isNearBottom,
   isScrollAwayKey,
   isScrollTowardOlderContent,
+  isTouchTowardOlderContent,
   matchesProgrammaticScroll,
+  promptAnchorScrollTop,
   shouldProcessMessageFollowEffect,
   shouldResumeFollowingAtBottom,
 } from "../app/lib/scroll-follow.mjs";
@@ -38,6 +41,24 @@ test("touch intent ignores jitter and detects a deliberate gesture in either dir
   assert.equal(hasIntentionalTouchMove(300, 296), false);
   assert.equal(hasIntentionalTouchMove(300, 284), true);
   assert.equal(hasIntentionalTouchMove(300, 318), true);
+});
+
+test("only a downward drag toward older content pauses following, like a negative wheel", () => {
+  assert.equal(isTouchTowardOlderContent(300, 318), true);
+  assert.equal(isTouchTowardOlderContent(300, 284), false);
+  assert.equal(isTouchTowardOlderContent(300, 304), false);
+});
+
+test("the prompt anchor offset is applied once from a single source", () => {
+  assert.equal(PROMPT_ANCHOR_OFFSET, 8);
+  assert.equal(
+    promptAnchorScrollTop({ scrollTop: 400, containerTop: 120, anchorTop: 520 }),
+    792,
+  );
+  assert.equal(
+    promptAnchorScrollTop({ scrollTop: 0, containerTop: 120, anchorTop: 120 }, 0),
+    0,
+  );
 });
 
 test("an explicit pause survives its own near-bottom scroll event", () => {

@@ -1,6 +1,7 @@
 export const BOTTOM_FOLLOW_THRESHOLD = 80;
 export const BOTTOM_RESUME_THRESHOLD = 1;
 export const TOUCH_SCROLL_THRESHOLD = 8;
+export const PROMPT_ANCHOR_OFFSET = 8;
 
 export function distanceFromBottom({ scrollHeight, scrollTop, clientHeight }) {
   return Math.max(0, scrollHeight - scrollTop - clientHeight);
@@ -27,6 +28,13 @@ export function shouldResumeFollowingAtBottom(
     && Number.isFinite(scrollTop)
     && scrollTop > previousScrollTop
     && distanceFromBottom({ scrollHeight, scrollTop, clientHeight }) <= threshold;
+}
+
+export function promptAnchorScrollTop(
+  { scrollTop, containerTop, anchorTop },
+  offset = PROMPT_ANCHOR_OFFSET,
+) {
+  return scrollTop + anchorTop - containerTop - offset;
 }
 
 export function matchesProgrammaticScroll(scrollTop, targetTop, tolerance = 1) {
@@ -57,4 +65,9 @@ export function hasIntentionalTouchMove(startY, currentY, threshold = TOUCH_SCRO
   return Number.isFinite(startY)
     && Number.isFinite(currentY)
     && Math.abs(currentY - startY) >= threshold;
+}
+
+// A downward finger drag reveals older content, matching a negative wheel deltaY.
+export function isTouchTowardOlderContent(startY, currentY, threshold = TOUCH_SCROLL_THRESHOLD) {
+  return hasIntentionalTouchMove(startY, currentY, threshold) && currentY > startY;
 }

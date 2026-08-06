@@ -28,7 +28,9 @@ import {
   isNearBottom,
   isScrollAwayKey,
   isScrollTowardOlderContent,
+  isTouchTowardOlderContent,
   matchesProgrammaticScroll,
+  promptAnchorScrollTop,
   shouldProcessMessageFollowEffect,
   shouldResumeFollowingAtBottom,
 } from "./lib/scroll-follow.mjs";
@@ -288,7 +290,11 @@ export default function Home() {
       if (anchor) {
         const containerRect = container.getBoundingClientRect();
         const anchorRect = anchor.getBoundingClientRect();
-        const anchorTop = container.scrollTop + anchorRect.top - containerRect.top - 8;
+        const anchorTop = promptAnchorScrollTop({
+          scrollTop: container.scrollTop,
+          containerTop: containerRect.top,
+          anchorTop: anchorRect.top,
+        });
         runProgrammaticScroll(container, anchorTop);
         scrollPositionsRef.current.set(activeConversationId, Math.max(0, anchorTop));
         skipNextStreamFollowRef.current = true;
@@ -586,10 +592,11 @@ export default function Home() {
   function handleMessageTouchMove(event: TouchEvent<HTMLDivElement>) {
     const currentY = event.touches[0]?.clientY;
     if (currentY === undefined || touchStartYRef.current === null) return;
-    if (hasIntentionalTouchMove(touchStartYRef.current, currentY)) {
+    if (!hasIntentionalTouchMove(touchStartYRef.current, currentY)) return;
+    if (isTouchTowardOlderContent(touchStartYRef.current, currentY)) {
       pauseFollowingForUserIntent();
-      touchStartYRef.current = currentY;
     }
+    touchStartYRef.current = currentY;
   }
 
   function handleMessageKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -758,7 +765,6 @@ export default function Home() {
                   <b>模型正在生成</b>
                 </div>
               )}
-              <div aria-hidden="true" />
             </div>
           )}
         </div>
