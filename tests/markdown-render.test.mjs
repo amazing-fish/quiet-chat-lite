@@ -121,8 +121,13 @@ test("treats raw HTML and images as text and rejects executable URL schemes", ()
 });
 
 test("uses an allowlist for links including obfuscated dangerous schemes", () => {
+  const controlObfuscatedNetworkPath = "/\t/evil.example/path";
   assert.equal(
     new URL("/\\evil.example/path", "https://quiet-chat.example").href,
+    "https://evil.example/path",
+  );
+  assert.equal(
+    new URL(controlObfuscatedNetworkPath, "https://quiet-chat.example").href,
     "https://evil.example/path",
   );
 
@@ -146,6 +151,10 @@ test("uses an allowlist for links including obfuscated dangerous schemes", () =>
   assert.deepEqual(safeLinkTarget("/local/path"), { href: "/local/path", external: false });
   assert.deepEqual(safeLinkTarget("#section"), { href: "#section", external: false });
   assert.deepEqual(safeLinkTarget("//cdn.example.com/file"), { href: "//cdn.example.com/file", external: true });
+  assert.deepEqual(safeLinkTarget(controlObfuscatedNetworkPath), {
+    href: controlObfuscatedNetworkPath,
+    external: true,
+  });
 });
 
 test("renders every streaming prefix without throwing or losing received content", () => {

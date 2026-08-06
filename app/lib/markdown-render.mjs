@@ -33,9 +33,10 @@ export function safeLinkTarget(href) {
   // backslash prevents mixed forms such as `/\\evil.example` from becoming a
   // network-path reference after this function classified them as relative.
   if (!value || value.includes("\\")) return null;
-  if (value.startsWith("//")) return { href: value, external: true };
 
   const compact = value.replace(SCHEME_WHITESPACE, "");
+  if (compact.startsWith("//")) return { href: value, external: true };
+
   const colonIndex = compact.indexOf(":");
   const pathIndex = compact.search(/[/?#]/);
   const hasScheme = colonIndex > 0 && (pathIndex === -1 || colonIndex < pathIndex);
