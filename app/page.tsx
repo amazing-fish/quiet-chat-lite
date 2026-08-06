@@ -29,6 +29,7 @@ import {
   isScrollAwayKey,
   isScrollTowardOlderContent,
   matchesProgrammaticScroll,
+  shouldProcessMessageFollowEffect,
   shouldResumeFollowingAtBottom,
 } from "./lib/scroll-follow.mjs";
 
@@ -147,6 +148,10 @@ export default function Home() {
   const touchStartYRef = useRef<number | null>(null);
   const scrollPositionsRef = useRef(new Map<string, number>());
   const previousConversationIdRef = useRef<string | null>(null);
+  const observedActiveMessagesRef = useRef<{
+    conversationId: string | null;
+    messages: Message[] | null;
+  }>({ conversationId: null, messages: null });
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeConversationId) ?? null,
@@ -238,6 +243,10 @@ export default function Home() {
     if (previousConversationIdRef.current === activeConversationId) return;
 
     previousConversationIdRef.current = activeConversationId;
+    observedActiveMessagesRef.current = {
+      conversationId: activeConversationId,
+      messages: activeConversation?.messages ?? null,
+    };
     userPausedFollowingRef.current = false;
     setPromptAnchorMessageId(null);
     const savedTop = initialConversationScrollTop(
@@ -251,11 +260,27 @@ export default function Home() {
       scrollTop: savedTop,
       clientHeight: container.clientHeight,
     }));
-  }, [activeConversationId, runProgrammaticScroll, updateFollowing]);
+  }, [activeConversation?.messages, activeConversationId, runProgrammaticScroll, updateFollowing]);
 
   useLayoutEffect(() => {
     const container = messageScrollRef.current;
-    if (!container || !activeConversationId || pendingConversationId !== activeConversationId) return;
+    if (!container || !activeConversationId) return;
+
+    const currentMessages = activeConversation?.messages ?? null;
+    const observedMessages = observedActiveMessagesRef.current;
+    const conversationChanged = observedMessages.conversationId !== activeConversationId;
+    const messagesChanged = !conversationChanged && observedMessages.messages !== currentMessages;
+    if (conversationChanged || messagesChanged) {
+      observedActiveMessagesRef.current = {
+        conversationId: activeConversationId,
+        messages: currentMessages,
+      };
+    }
+    if (!shouldProcessMessageFollowEffect({
+      conversationChanged,
+      messagesChanged,
+      skipNextFollow: skipNextStreamFollowRef.current,
+    })) return;
 
     const anchorId = promptAnchorMessageId;
     if (anchorId) {
@@ -278,7 +303,7 @@ export default function Home() {
     }
     if (!isFollowingRef.current) return;
     runProgrammaticScroll(container, container.scrollHeight);
-  }, [activeConversation?.messages, activeConversationId, pendingConversationId, promptAnchorMessageId, runProgrammaticScroll]);
+  }, [activeConversation?.messages, activeConversationId, promptAnchorMessageId, runProgrammaticScroll]);
 
   function updateConversation(id: string, updater: (conversation: Conversation) => Conversation) {
     setConversations((current) =>

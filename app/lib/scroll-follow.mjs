@@ -41,6 +41,14 @@ export function isScrollTowardOlderContent(previousScrollTop, scrollTop, toleran
     && scrollTop < previousScrollTop - tolerance;
 }
 
+export function shouldProcessMessageFollowEffect({
+  conversationChanged,
+  messagesChanged,
+  skipNextFollow,
+}) {
+  return !conversationChanged && (messagesChanged || skipNextFollow);
+}
+
 export function isScrollAwayKey(key) {
   return key === "ArrowUp" || key === "PageUp" || key === "Home";
 }

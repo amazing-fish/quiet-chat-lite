@@ -9,6 +9,7 @@ import {
   isScrollAwayKey,
   isScrollTowardOlderContent,
   matchesProgrammaticScroll,
+  shouldProcessMessageFollowEffect,
   shouldResumeFollowingAtBottom,
 } from "../app/lib/scroll-follow.mjs";
 
@@ -87,4 +88,27 @@ test("unvisited conversations open at the bottom while saved zero remains valid"
   assert.equal(initialConversationScrollTop(metrics, 0), 0);
   assert.equal(initialConversationScrollTop(metrics, 900), 900);
   assert.equal(initialConversationScrollTop(metrics, 2000), 960);
+});
+
+test("the final message update follows independently of request pending state", () => {
+  assert.equal(shouldProcessMessageFollowEffect({
+    conversationChanged: false,
+    messagesChanged: true,
+    skipNextFollow: false,
+  }), true);
+  assert.equal(shouldProcessMessageFollowEffect({
+    conversationChanged: false,
+    messagesChanged: false,
+    skipNextFollow: false,
+  }), false);
+  assert.equal(shouldProcessMessageFollowEffect({
+    conversationChanged: true,
+    messagesChanged: true,
+    skipNextFollow: false,
+  }), false);
+  assert.equal(shouldProcessMessageFollowEffect({
+    conversationChanged: false,
+    messagesChanged: false,
+    skipNextFollow: true,
+  }), true);
 });
