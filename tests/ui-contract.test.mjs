@@ -24,9 +24,19 @@ test("chat workspace exposes the required conversation and request controls", as
   assert.match(page, /THEME_STORAGE_KEY/);
   assert.match(page, /trace\.state === "error"/);
   assert.match(page, /requestChatStreamWithFallback/);
+  assert.match(page, /readResponseErrorMessage/);
+  assert.doesNotMatch(page, /const data = await response\.json\(\) as \{ error\?: string \}/);
   assert.match(page, /模型正在生成/);
   assert.match(page, /Provider Token Usage/);
   assert.match(page, /流式响应/);
+  assert.match(page, /返回最新 · 继续跟随/);
+  assert.match(page, /onWheel=\{handleMessageWheel\}/);
+  assert.match(page, /onTouchMove=\{handleMessageTouchMove\}/);
+  assert.match(page, /onKeyDown=\{handleMessageKeyDown\}/);
+  assert.match(page, /data-scroll-anchor/);
+  assert.match(page, /skipNextStreamFollowRef/);
+  assert.match(page, /behavior: "auto"/);
+  assert.doesNotMatch(page, /messageEndRef\.current\?\.scrollIntoView/);
   assert.doesNotMatch(page, /非流式响应/);
 });
 
@@ -47,4 +57,5 @@ test("responsive styles provide mobile panels and accessible reduced motion", as
   assert.match(css, /color-scheme:\s*dark/);
   assert.match(css, /\.message-usage/);
   assert.match(css, /\.trace-state\.is-streaming/);
+  assert.match(css, /\.scroll-follow-control/);
 });

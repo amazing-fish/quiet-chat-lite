@@ -1,6 +1,17 @@
 "use client";
 
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FormEvent,
+  KeyboardEvent,
+  TouchEvent,
+  WheelEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   STORAGE_KEY,
   buildChatRequest,
@@ -8,9 +19,14 @@ import {
   hydrateLocalState,
   serializeLocalState,
 } from "./lib/chat-state.mjs";
-import { requestErrorMessage } from "./lib/client-errors.mjs";
+import { readResponseErrorMessage, requestErrorMessage } from "./lib/client-errors.mjs";
 import { requestChatStreamWithFallback } from "./lib/chat-request.mjs";
 import { randomId } from "./lib/id.mjs";
+import {
+  hasIntentionalTouchMove,
+  isNearBottom,
+  isScrollAwayKey,
+} from "./lib/scroll-follow.mjs";
 
 type MessageRole = "user" | "assistant" | "error";
 
@@ -113,10 +129,18 @@ export default function Home() {
   const [requestTraces, setRequestTraces] = useState<RequestTrace[]>([]);
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [theme, setTheme] = useState<Theme>("light");
+  const [isFollowing, setIsFollowing] = useState(true);
+  const [promptAnchorMessageId, setPromptAnchorMessageId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const stoppedByUserRef = useRef(false);
   const lastErrorTraceIdRef = useRef<string | null>(null);
-  const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const messageScrollRef = useRef<HTMLDivElement | null>(null);
+  const isFollowingRef = useRef(true);
+  const skipNextStreamFollowRef = useRef(false);
+  const programmaticScrollUntilRef = useRef(0);
+  const touchStartYRef = useRef<number | null>(null);
+  const scrollPositionsRef = useRef(new Map<string, number>());
+  const previousConversationIdRef = useRef<string | null>(null);
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeConversationId) ?? null,
@@ -183,12 +207,71 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [activeConversationId, conversations, hydrated, settings]);
 
-  useEffect(() => {
-    messageEndRef.current?.scrollIntoView({
-      behavior: pendingConversationId ? "auto" : "smooth",
-      block: "end",
-    });
-  }, [activeConversation?.messages, pendingConversationId]);
+  const updateFollowing = useCallback((next: boolean) => {
+    isFollowingRef.current = next;
+    setIsFollowing(next);
+  }, []);
+
+  const runProgrammaticScroll = useCallback((action: () => void, durationMs = 80) => {
+    programmaticScrollUntilRef.current = performance.now() + durationMs;
+    action();
+  }, []);
+
+  const rememberCurrentScrollPosition = useCallback(() => {
+    const container = messageScrollRef.current;
+    if (container && activeConversationId) {
+      scrollPositionsRef.current.set(activeConversationId, container.scrollTop);
+    }
+  }, [activeConversationId]);
+
+  useLayoutEffect(() => {
+    const container = messageScrollRef.current;
+    if (!container || !activeConversationId) return;
+    if (previousConversationIdRef.current === activeConversationId) return;
+
+    previousConversationIdRef.current = activeConversationId;
+    setPromptAnchorMessageId(null);
+    const savedTop = scrollPositionsRef.current.get(activeConversationId) ?? 0;
+    runProgrammaticScroll(() => container.scrollTo({ top: savedTop, behavior: "auto" }));
+    updateFollowing(isNearBottom({
+      scrollHeight: container.scrollHeight,
+      scrollTop: savedTop,
+      clientHeight: container.clientHeight,
+    }));
+  }, [activeConversationId, runProgrammaticScroll, updateFollowing]);
+
+  useLayoutEffect(() => {
+    const container = messageScrollRef.current;
+    if (!container || !activeConversationId || pendingConversationId !== activeConversationId) return;
+
+    const anchorId = promptAnchorMessageId;
+    if (anchorId) {
+      const anchor = container.querySelector<HTMLElement>("[data-scroll-anchor='true']");
+      if (anchor) {
+        const containerRect = container.getBoundingClientRect();
+        const anchorRect = anchor.getBoundingClientRect();
+        const anchorTop = container.scrollTop + anchorRect.top - containerRect.top - 8;
+        runProgrammaticScroll(() => container.scrollTo({
+          top: Math.max(0, anchorTop),
+          behavior: "auto",
+        }));
+        scrollPositionsRef.current.set(activeConversationId, Math.max(0, anchorTop));
+        skipNextStreamFollowRef.current = true;
+        setPromptAnchorMessageId(null);
+        return;
+      }
+    }
+
+    if (skipNextStreamFollowRef.current) {
+      skipNextStreamFollowRef.current = false;
+      return;
+    }
+    if (!isFollowingRef.current) return;
+    runProgrammaticScroll(() => container.scrollTo({
+      top: container.scrollHeight,
+      behavior: "auto",
+    }));
+  }, [activeConversation?.messages, activeConversationId, pendingConversationId, promptAnchorMessageId, runProgrammaticScroll]);
 
   function updateConversation(id: string, updater: (conversation: Conversation) => Conversation) {
     setConversations((current) =>
@@ -197,6 +280,7 @@ export default function Home() {
   }
 
   function newConversation() {
+    rememberCurrentScrollPosition();
     const conversation = createConversation() as Conversation;
     setConversations((current) => [conversation, ...current]);
     setActiveConversationId(conversation.id);
@@ -216,6 +300,7 @@ export default function Home() {
 
   function deleteConversation(id: string) {
     if (!window.confirm("删除这个对话？此操作只影响当前设备。")) return;
+    rememberCurrentScrollPosition();
     setConversations((current) => {
       const remaining = current.filter((conversation) => conversation.id !== id);
       if (remaining.length > 0) {
@@ -241,6 +326,9 @@ export default function Home() {
     setSettingsError("");
     setPendingConversationId(null);
     setSettingsOpen(false);
+    setPromptAnchorMessageId(null);
+    scrollPositionsRef.current.clear();
+    updateFollowing(true);
   }
 
   function validateSettings() {
@@ -264,8 +352,9 @@ export default function Home() {
     setSavingSettings(true);
     try {
       const response = await fetch("/api/profile", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(settings) });
-      const data = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(data.error || "保存失败");
+      if (!response.ok) {
+        throw new Error(await readResponseErrorMessage(response, "保存配置失败"));
+      }
       setSettingsOpen(false);
     } catch (error) { setSettingsError(error instanceof Error ? error.message : "保存失败"); }
     finally { setSavingSettings(false); }
@@ -294,6 +383,8 @@ export default function Home() {
       role: "assistant",
       content: "",
     };
+    setPromptAnchorMessageId(userMessage.id);
+    updateFollowing(true);
     updateConversation(targetId, () => ({
       ...requestConversation,
       messages: [...requestConversation.messages, assistantMessage],
@@ -409,6 +500,53 @@ export default function Home() {
     }
   }
 
+  function pauseFollowingForUserIntent() {
+    programmaticScrollUntilRef.current = 0;
+    updateFollowing(false);
+  }
+
+  function handleMessageScroll() {
+    const container = messageScrollRef.current;
+    if (!container) return;
+    if (activeConversationId) {
+      scrollPositionsRef.current.set(activeConversationId, container.scrollTop);
+    }
+    if (performance.now() < programmaticScrollUntilRef.current) return;
+    updateFollowing(isNearBottom(container));
+  }
+
+  function handleMessageWheel(event: WheelEvent<HTMLDivElement>) {
+    if (event.deltaY < 0) pauseFollowingForUserIntent();
+  }
+
+  function handleMessageTouchStart(event: TouchEvent<HTMLDivElement>) {
+    touchStartYRef.current = event.touches[0]?.clientY ?? null;
+  }
+
+  function handleMessageTouchMove(event: TouchEvent<HTMLDivElement>) {
+    const currentY = event.touches[0]?.clientY;
+    if (currentY === undefined || touchStartYRef.current === null) return;
+    if (hasIntentionalTouchMove(touchStartYRef.current, currentY)) {
+      pauseFollowingForUserIntent();
+      touchStartYRef.current = currentY;
+    }
+  }
+
+  function handleMessageKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (isScrollAwayKey(event.key)) pauseFollowingForUserIntent();
+  }
+
+  function resumeFollowing() {
+    const container = messageScrollRef.current;
+    if (!container) return;
+    updateFollowing(true);
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    runProgrammaticScroll(() => container.scrollTo({
+      top: container.scrollHeight,
+      behavior: reduceMotion ? "auto" : "smooth",
+    }), reduceMotion ? 80 : 500);
+  }
+
   const settingsReady = Boolean(
     settings.baseUrl.trim() && settings.model.trim() && settings.apiKey.trim(),
   );
@@ -455,6 +593,7 @@ export default function Home() {
               <button
                 className="conversation-select"
                 onClick={() => {
+                  rememberCurrentScrollPosition();
                   setActiveConversationId(conversation.id);
                   setSidebarOpen(false);
                 }}
@@ -502,7 +641,20 @@ export default function Home() {
           {account ? <a className="account-button" href="/signout-with-chatgpt?return_to=%2F" title="退出登录">{account.name}</a> : <a className="account-button" href="/signin-with-chatgpt?return_to=%2F">登录</a>}
         </header>
 
-        <div className="message-scroll" aria-live="polite">
+        <div
+          ref={messageScrollRef}
+          className="message-scroll"
+          role="log"
+          aria-live="polite"
+          aria-label="对话消息"
+          tabIndex={0}
+          onScroll={handleMessageScroll}
+          onWheel={handleMessageWheel}
+          onTouchStart={handleMessageTouchStart}
+          onTouchMove={handleMessageTouchMove}
+          onTouchEnd={() => { touchStartYRef.current = null; }}
+          onKeyDown={handleMessageKeyDown}
+        >
           {activeConversation && activeConversation.messages.length === 0 ? (
             <div className="empty-state">
               <span className="eyebrow">READY WHEN YOU ARE</span>
@@ -513,7 +665,11 @@ export default function Home() {
           ) : (
             <div className="messages">
               {activeConversation?.messages.map((message) => (
-                <article key={message.id} className={`message message-${message.role}`}>
+                <article
+                  key={message.id}
+                  className={`message message-${message.role}`}
+                  data-scroll-anchor={message.id === promptAnchorMessageId ? "true" : undefined}
+                >
                   <div className="message-label">
                     {message.role === "user" ? "你" : message.role === "assistant" ? "模型" : "错误"}
                   </div>
@@ -545,12 +701,20 @@ export default function Home() {
                   <b>模型正在生成</b>
                 </div>
               )}
-              <div ref={messageEndRef} />
+              <div aria-hidden="true" />
             </div>
           )}
         </div>
 
         <form className="composer" onSubmit={sendMessage}>
+          {!isFollowing && (
+            <div className="scroll-follow-control" role="status">
+              <button type="button" onClick={resumeFollowing}>
+                <span aria-hidden="true">↓</span>
+                返回最新 · 继续跟随
+              </button>
+            </div>
+          )}
           <div className="composer-box">
             <textarea
               value={draft}

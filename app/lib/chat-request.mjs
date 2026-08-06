@@ -12,6 +12,10 @@ import { randomId } from "./id.mjs";
 const REDACTED_SECRET = "[已隐藏]";
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000;
 
+function globalFetch(input, init) {
+  return globalThis.fetch(input, init);
+}
+
 class ChatRequestError extends Error {
   constructor(message, { allowDirectFallback = false, traceResponse = null } = {}) {
     super(message);
@@ -475,8 +479,8 @@ async function directChatStream(request, options, traceContext) {
 export async function requestChatStreamWithFallback(
   request,
   {
-    proxyFetch = fetch,
-    directFetch = fetch,
+    proxyFetch = globalFetch,
+    directFetch = globalFetch,
     signal,
     directTimeoutMs = DEFAULT_STREAM_IDLE_TIMEOUT_MS,
     requestId = randomId(),
