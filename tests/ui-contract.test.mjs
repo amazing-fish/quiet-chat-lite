@@ -77,7 +77,10 @@ test("assistant Markdown maps a pure safe structure to JSX without HTML injectio
   assert.match(component, /markdownToRenderTree\(markdown\)/);
   assert.match(component, /target=\{node\.external \? "_blank"/);
   assert.match(component, /rel=\{node\.external \? "noopener noreferrer"/);
-  assert.match(component, /navigator\.clipboard\.writeText\(node\.value\)/);
+  assert.match(component, /const copyState = copyResult\?\.value === node\.value \? copyResult\.state : "idle"/);
+  assert.match(component, /const valueToCopy = node\.value/);
+  assert.match(component, /navigator\.clipboard\.writeText\(valueToCopy\)/);
+  assert.match(component, /setCopyResult\(\{ value: valueToCopy, state: "copied" \}\)/);
   assert.doesNotMatch(component, /dangerouslySetInnerHTML/);
   assert.doesNotMatch(renderer, /(?:from|require\()["']react/);
   assert.doesNotMatch(renderer, /\b(?:window|document)\s*\./);

@@ -48,15 +48,20 @@ function renderHighlight(node: MarkdownHighlightNode, key: string): ReactNode {
 }
 
 function CodeBlock({ node }: { node: Extract<MarkdownBlockNode, { type: "codeBlock" }> }) {
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const [copyResult, setCopyResult] = useState<{
+    value: string;
+    state: "copied" | "error";
+  } | null>(null);
+  const copyState = copyResult?.value === node.value ? copyResult.state : "idle";
 
   const copy = async () => {
+    const valueToCopy = node.value;
     try {
       if (!navigator.clipboard) throw new Error("Clipboard API unavailable");
-      await navigator.clipboard.writeText(node.value);
-      setCopyState("copied");
+      await navigator.clipboard.writeText(valueToCopy);
+      setCopyResult({ value: valueToCopy, state: "copied" });
     } catch {
-      setCopyState("error");
+      setCopyResult({ value: valueToCopy, state: "error" });
     }
   };
 

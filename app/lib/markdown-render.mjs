@@ -29,7 +29,10 @@ export function safeLinkTarget(href) {
   if (typeof href !== "string") return null;
 
   const value = href.trim();
-  if (!value || value.startsWith("\\")) return null;
+  // Browsers normalize backslashes while resolving URLs. Rejecting every
+  // backslash prevents mixed forms such as `/\\evil.example` from becoming a
+  // network-path reference after this function classified them as relative.
+  if (!value || value.includes("\\")) return null;
   if (value.startsWith("//")) return { href: value, external: true };
 
   const compact = value.replace(SCHEME_WHITESPACE, "");

@@ -121,6 +121,11 @@ test("treats raw HTML and images as text and rejects executable URL schemes", ()
 });
 
 test("uses an allowlist for links including obfuscated dangerous schemes", () => {
+  assert.equal(
+    new URL("/\\evil.example/path", "https://quiet-chat.example").href,
+    "https://evil.example/path",
+  );
+
   for (const href of [
     "javascript:alert(1)",
     " JAVASCRIPT:alert(1)",
@@ -129,6 +134,9 @@ test("uses an allowlist for links including obfuscated dangerous schemes", () =>
     "vbscript:msgbox(1)",
     "file:///etc/passwd",
     "\\\\evil.example/path",
+    "/\\evil.example/path",
+    "\\/evil.example/path",
+    "nested\\path",
   ]) {
     assert.equal(safeLinkTarget(href), null, href);
   }
