@@ -20,6 +20,18 @@ export function shouldResumeFollowingAtBottom(
     && distanceFromBottom({ scrollHeight, scrollTop, clientHeight }) <= threshold;
 }
 
+export function matchesProgrammaticScroll(scrollTop, targetTop, tolerance = 1) {
+  return Number.isFinite(scrollTop)
+    && Number.isFinite(targetTop)
+    && Math.abs(scrollTop - targetTop) <= tolerance;
+}
+
+export function isScrollTowardOlderContent(previousScrollTop, scrollTop, tolerance = 1) {
+  return Number.isFinite(previousScrollTop)
+    && Number.isFinite(scrollTop)
+    && scrollTop < previousScrollTop - tolerance;
+}
+
 export function isScrollAwayKey(key) {
   return key === "ArrowUp" || key === "PageUp" || key === "Home";
 }

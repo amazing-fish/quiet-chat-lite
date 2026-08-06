@@ -6,6 +6,8 @@ import {
   hasIntentionalTouchMove,
   isNearBottom,
   isScrollAwayKey,
+  isScrollTowardOlderContent,
+  matchesProgrammaticScroll,
   shouldResumeFollowingAtBottom,
 } from "../app/lib/scroll-follow.mjs";
 
@@ -64,4 +66,16 @@ test("an explicit pause resumes only after scrolling forward to the actual botto
     scrollHeight: 1600,
     clientHeight: 640,
   }), true);
+});
+
+test("only the exact programmatic target is suppressed", () => {
+  assert.equal(matchesProgrammaticScroll(960, 960), true);
+  assert.equal(matchesProgrammaticScroll(959.5, 960), true);
+  assert.equal(matchesProgrammaticScroll(900, 960), false);
+});
+
+test("scrollbar movement toward older content is treated as user intent", () => {
+  assert.equal(isScrollTowardOlderContent(960, 900), true);
+  assert.equal(isScrollTowardOlderContent(960, 959.5), false);
+  assert.equal(isScrollTowardOlderContent(900, 940), false);
 });

@@ -26,6 +26,8 @@ import {
   hasIntentionalTouchMove,
   isNearBottom,
   isScrollAwayKey,
+  isScrollTowardOlderContent,
+  matchesProgrammaticScroll,
   shouldResumeFollowingAtBottom,
 } from "./lib/scroll-follow.mjs";
 
@@ -139,7 +141,7 @@ export default function Home() {
   const isFollowingRef = useRef(true);
   const userPausedFollowingRef = useRef(false);
   const skipNextStreamFollowRef = useRef(false);
-  const programmaticScrollUntilRef = useRef(0);
+  const programmaticScrollTargetRef = useRef<number | null>(null);
   const previousScrollTopRef = useRef(0);
   const touchStartYRef = useRef<number | null>(null);
   const scrollPositionsRef = useRef(new Map<string, number>());
@@ -215,9 +217,11 @@ export default function Home() {
     setIsFollowing(next);
   }, []);
 
-  const runProgrammaticScroll = useCallback((action: () => void, durationMs = 80) => {
-    programmaticScrollUntilRef.current = performance.now() + durationMs;
-    action();
+  const runProgrammaticScroll = useCallback((container: HTMLDivElement, top: number) => {
+    const maxTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    const targetTop = Math.min(maxTop, Math.max(0, top));
+    programmaticScrollTargetRef.current = targetTop;
+    container.scrollTo({ top: targetTop, behavior: "auto" });
   }, []);
 
   const rememberCurrentScrollPosition = useCallback(() => {
@@ -237,7 +241,7 @@ export default function Home() {
     setPromptAnchorMessageId(null);
     const savedTop = scrollPositionsRef.current.get(activeConversationId) ?? 0;
     previousScrollTopRef.current = savedTop;
-    runProgrammaticScroll(() => container.scrollTo({ top: savedTop, behavior: "auto" }));
+    runProgrammaticScroll(container, savedTop);
     updateFollowing(isNearBottom({
       scrollHeight: container.scrollHeight,
       scrollTop: savedTop,
@@ -256,10 +260,7 @@ export default function Home() {
         const containerRect = container.getBoundingClientRect();
         const anchorRect = anchor.getBoundingClientRect();
         const anchorTop = container.scrollTop + anchorRect.top - containerRect.top - 8;
-        runProgrammaticScroll(() => container.scrollTo({
-          top: Math.max(0, anchorTop),
-          behavior: "auto",
-        }));
+        runProgrammaticScroll(container, anchorTop);
         scrollPositionsRef.current.set(activeConversationId, Math.max(0, anchorTop));
         skipNextStreamFollowRef.current = true;
         setPromptAnchorMessageId(null);
@@ -272,10 +273,7 @@ export default function Home() {
       return;
     }
     if (!isFollowingRef.current) return;
-    runProgrammaticScroll(() => container.scrollTo({
-      top: container.scrollHeight,
-      behavior: "auto",
-    }));
+    runProgrammaticScroll(container, container.scrollHeight);
   }, [activeConversation?.messages, activeConversationId, pendingConversationId, promptAnchorMessageId, runProgrammaticScroll]);
 
   function updateConversation(id: string, updater: (conversation: Conversation) => Conversation) {
@@ -510,7 +508,7 @@ export default function Home() {
 
   function pauseFollowingForUserIntent() {
     userPausedFollowingRef.current = true;
-    programmaticScrollUntilRef.current = 0;
+    programmaticScrollTargetRef.current = null;
     updateFollowing(false);
   }
 
@@ -522,7 +520,17 @@ export default function Home() {
     if (activeConversationId) {
       scrollPositionsRef.current.set(activeConversationId, container.scrollTop);
     }
-    if (performance.now() < programmaticScrollUntilRef.current) return;
+    const programmaticTarget = programmaticScrollTargetRef.current;
+    if (matchesProgrammaticScroll(container.scrollTop, programmaticTarget)) {
+      programmaticScrollTargetRef.current = null;
+      return;
+    }
+    programmaticScrollTargetRef.current = null;
+    if (isScrollTowardOlderContent(previousScrollTop, container.scrollTop)) {
+      userPausedFollowingRef.current = true;
+      updateFollowing(false);
+      return;
+    }
     if (userPausedFollowingRef.current) {
       if (shouldResumeFollowingAtBottom({
         previousScrollTop,
@@ -564,11 +572,7 @@ export default function Home() {
     if (!container) return;
     userPausedFollowingRef.current = false;
     updateFollowing(true);
-    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    runProgrammaticScroll(() => container.scrollTo({
-      top: container.scrollHeight,
-      behavior: reduceMotion ? "auto" : "smooth",
-    }), reduceMotion ? 80 : 500);
+    runProgrammaticScroll(container, container.scrollHeight);
   }
 
   const settingsReady = Boolean(
