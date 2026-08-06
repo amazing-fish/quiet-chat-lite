@@ -19,3 +19,30 @@ export function requestErrorMessage(error, stoppedByUser) {
   }
   return "请求失败，请稍后重试。";
 }
+
+export async function readResponseErrorMessage(response, fallback = "请求失败") {
+  let body = "";
+  try {
+    body = await response.text();
+  } catch {
+    // A response body can itself be unreadable after a transport failure.
+  }
+
+  const trimmed = body.trim();
+  if (trimmed) {
+    try {
+      const payload = JSON.parse(trimmed);
+      if (typeof payload?.error === "string" && payload.error.trim()) {
+        return payload.error.trim();
+      }
+      if (typeof payload?.error?.message === "string" && payload.error.message.trim()) {
+        return payload.error.message.trim();
+      }
+    } catch {
+      const contentType = response.headers.get("content-type") ?? "";
+      if (contentType.startsWith("text/plain")) return trimmed.slice(0, 240);
+    }
+  }
+
+  return `${fallback}（HTTP ${response.status}）`;
+}

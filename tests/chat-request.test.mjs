@@ -33,6 +33,38 @@ function openAiStream(payloads) {
   );
 }
 
+test("default fetch keeps the browser global as its receiver across proxy and direct requests", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+
+  globalThis.fetch = function (input) {
+    assert.equal(this, globalThis);
+    calls.push(String(input));
+    if (input === "/api/chat") {
+      return Promise.resolve(Response.json(
+        { error: { code: "upstream_network", message: "无法连接上游。" } },
+        { status: 502 },
+      ));
+    }
+    return Promise.resolve(openAiStream([
+      { choices: [{ delta: { content: "绑定正确" }, finish_reason: "stop" }] },
+      "[DONE]",
+    ]));
+  };
+
+  try {
+    const result = await requestChatStreamWithFallback(request);
+    assert.equal(result.content, "绑定正确");
+    assert.equal(result.transport, "direct");
+    assert.deepEqual(calls, [
+      "/api/chat",
+      "https://77code.cn/v1/chat/completions",
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("proxy streaming emits incremental text and provider usage", async () => {
   const deltas = [];
   const usages = [];
