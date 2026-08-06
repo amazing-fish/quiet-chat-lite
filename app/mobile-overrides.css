@@ -1,0 +1,7 @@
+@media (max-width: 760px) {
+  /* Keep the navigation drawer above the shared backdrop so its controls remain clickable. */
+  .panel-backdrop { z-index: 25; }
+  .sidebar { z-index: 30; }
+  .settings-panel { z-index: 40; }
+  .request-console { z-index: 50; }
+}

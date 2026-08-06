@@ -19,14 +19,32 @@ export function buildChatRequest(conversation, settings) {
     model: settings.model.trim(),
     apiKey: settings.apiKey,
     messages: conversation.messages
-      .filter((message) => message.role === "user" || message.role === "assistant")
+      .filter(
+        (message) =>
+          (message.role === "user" || message.role === "assistant")
+          && typeof message.content === "string"
+          && Boolean(message.content.trim()),
+      )
       .map(({ role, content }) => ({ role, content })),
   };
 }
 
+function withoutEmptyAssistantPlaceholders(conversations) {
+  return conversations.map((conversation) => ({
+    ...conversation,
+    messages: Array.isArray(conversation.messages)
+      ? conversation.messages.filter(
+        (message) =>
+          message?.role !== "assistant"
+          || (typeof message.content === "string" && Boolean(message.content.trim())),
+      )
+      : [],
+  }));
+}
+
 export function serializeLocalState(state) {
   return JSON.stringify({
-    conversations: state.conversations,
+    conversations: withoutEmptyAssistantPlaceholders(state.conversations),
     activeConversationId: state.activeConversationId,
     settings: {
       baseUrl: state.settings.baseUrl,
@@ -38,7 +56,7 @@ export function serializeLocalState(state) {
 export function hydrateLocalState(serialized) {
   const parsed = JSON.parse(serialized);
   const conversations = Array.isArray(parsed.conversations)
-    ? parsed.conversations
+    ? withoutEmptyAssistantPlaceholders(parsed.conversations)
     : [];
   const activeConversationId = conversations.some(
     (conversation) => conversation.id === parsed.activeConversationId,
