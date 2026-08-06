@@ -4,6 +4,7 @@ import {
   BOTTOM_FOLLOW_THRESHOLD,
   distanceFromBottom,
   hasIntentionalTouchMove,
+  initialConversationScrollTop,
   isNearBottom,
   isScrollAwayKey,
   isScrollTowardOlderContent,
@@ -78,4 +79,12 @@ test("scrollbar movement toward older content is treated as user intent", () => 
   assert.equal(isScrollTowardOlderContent(960, 900), true);
   assert.equal(isScrollTowardOlderContent(960, 959.5), false);
   assert.equal(isScrollTowardOlderContent(900, 940), false);
+});
+
+test("unvisited conversations open at the bottom while saved zero remains valid", () => {
+  const metrics = { scrollHeight: 1600, clientHeight: 640 };
+  assert.equal(initialConversationScrollTop(metrics, undefined), 960);
+  assert.equal(initialConversationScrollTop(metrics, 0), 0);
+  assert.equal(initialConversationScrollTop(metrics, 900), 900);
+  assert.equal(initialConversationScrollTop(metrics, 2000), 960);
 });

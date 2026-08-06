@@ -24,6 +24,7 @@ import { requestChatStreamWithFallback } from "./lib/chat-request.mjs";
 import { randomId } from "./lib/id.mjs";
 import {
   hasIntentionalTouchMove,
+  initialConversationScrollTop,
   isNearBottom,
   isScrollAwayKey,
   isScrollTowardOlderContent,
@@ -239,7 +240,10 @@ export default function Home() {
     previousConversationIdRef.current = activeConversationId;
     userPausedFollowingRef.current = false;
     setPromptAnchorMessageId(null);
-    const savedTop = scrollPositionsRef.current.get(activeConversationId) ?? 0;
+    const savedTop = initialConversationScrollTop(
+      container,
+      scrollPositionsRef.current.get(activeConversationId),
+    );
     previousScrollTopRef.current = savedTop;
     runProgrammaticScroll(container, savedTop);
     updateFollowing(isNearBottom({

@@ -10,6 +10,15 @@ export function isNearBottom(metrics, threshold = BOTTOM_FOLLOW_THRESHOLD) {
   return distanceFromBottom(metrics) <= threshold;
 }
 
+export function initialConversationScrollTop(
+  { scrollHeight, clientHeight },
+  savedScrollTop,
+) {
+  const maxTop = Math.max(0, scrollHeight - clientHeight);
+  if (!Number.isFinite(savedScrollTop)) return maxTop;
+  return Math.min(maxTop, Math.max(0, savedScrollTop));
+}
+
 export function shouldResumeFollowingAtBottom(
   { previousScrollTop, scrollTop, scrollHeight, clientHeight },
   threshold = BOTTOM_RESUME_THRESHOLD,
