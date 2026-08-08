@@ -81,6 +81,12 @@ test("assistant Markdown maps a pure safe structure to JSX without HTML injectio
   assert.match(component, /const valueToCopy = node\.value/);
   assert.match(component, /navigator\.clipboard\.writeText\(valueToCopy\)/);
   assert.match(component, /setCopyResult\(\{ value: valueToCopy, state: "copied" \}\)/);
+  assert.match(component, /const copyResetTimerRef = useRef<number \| null>\(null\)/);
+  assert.match(component, /window\.clearTimeout\(copyResetTimerRef\.current\)/);
+  assert.match(component, /window\.setTimeout\([\s\S]*?COPY_FEEDBACK_DURATION_MS/);
+  assert.match(component, /const COPY_FEEDBACK_DURATION_MS = 2_000/);
+  assert.match(component, /return \(\) => \{[\s\S]*?window\.clearTimeout\(copyResetTimerRef\.current\)/);
+  assert.match(component, /aria-label=\{copyLabel\}/);
   assert.doesNotMatch(component, /dangerouslySetInnerHTML/);
   assert.doesNotMatch(renderer, /(?:from|require\()["']react/);
   assert.doesNotMatch(renderer, /\b(?:window|document)\s*\./);

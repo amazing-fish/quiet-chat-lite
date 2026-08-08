@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   markdownToRenderTree,
   type MarkdownBlockNode,
@@ -8,6 +8,8 @@ import {
   type MarkdownInlineNode,
   type MarkdownListItem,
 } from "./lib/markdown-render.mjs";
+
+const COPY_FEEDBACK_DURATION_MS = 2_000;
 
 function renderInline(node: MarkdownInlineNode, key: string): ReactNode {
   switch (node.type) {
@@ -52,16 +54,56 @@ function CodeBlock({ node }: { node: Extract<MarkdownBlockNode, { type: "codeBlo
     value: string;
     state: "copied" | "error";
   } | null>(null);
+  const copyResetTimerRef = useRef<number | null>(null);
+  const copyAttemptRef = useRef(0);
   const copyState = copyResult?.value === node.value ? copyResult.state : "idle";
+  const copyLabel = copyState === "copied"
+    ? `${node.language} 代码已复制`
+    : copyState === "error"
+      ? `${node.language} 代码复制失败`
+      : `复制 ${node.language} 代码`;
+
+  useEffect(() => {
+    return () => {
+      copyAttemptRef.current += 1;
+      if (copyResetTimerRef.current !== null) {
+        window.clearTimeout(copyResetTimerRef.current);
+        copyResetTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const clearCopyResetTimer = () => {
+    if (copyResetTimerRef.current === null) return;
+    window.clearTimeout(copyResetTimerRef.current);
+    copyResetTimerRef.current = null;
+  };
+
+  const scheduleCopyReset = (valueToCopy: string, attempt: number) => {
+    clearCopyResetTimer();
+    copyResetTimerRef.current = window.setTimeout(() => {
+      if (copyAttemptRef.current !== attempt) return;
+      setCopyResult((current) => current?.value === valueToCopy ? null : current);
+      copyResetTimerRef.current = null;
+    }, COPY_FEEDBACK_DURATION_MS);
+  };
 
   const copy = async () => {
     const valueToCopy = node.value;
+    const attempt = copyAttemptRef.current + 1;
+    copyAttemptRef.current = attempt;
+    clearCopyResetTimer();
+    setCopyResult(null);
     try {
       if (!navigator.clipboard) throw new Error("Clipboard API unavailable");
       await navigator.clipboard.writeText(valueToCopy);
+      if (copyAttemptRef.current !== attempt) return;
       setCopyResult({ value: valueToCopy, state: "copied" });
+      scheduleCopyReset(valueToCopy, attempt);
     } catch {
+      if (copyAttemptRef.current !== attempt) return;
       setCopyResult({ value: valueToCopy, state: "error" });
+      scheduleCopyReset(valueToCopy, attempt);
     }
   };
 
@@ -69,7 +111,7 @@ function CodeBlock({ node }: { node: Extract<MarkdownBlockNode, { type: "codeBlo
     <section className="markdown-code-block">
       <div className="markdown-code-header">
         <span>{node.language}</span>
-        <button type="button" onClick={copy} aria-label={`复制 ${node.language} 代码`}>
+        <button type="button" onClick={copy} aria-label={copyLabel}>
           {copyState === "copied" ? "已复制" : copyState === "error" ? "复制失败" : "复制"}
         </button>
       </div>
