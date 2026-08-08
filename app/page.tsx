@@ -116,6 +116,15 @@ const DEFAULT_SETTINGS: Settings = {
   apiKey: "",
 };
 const THEME_STORAGE_KEY = "quiet-chat:theme";
+const APP_UPDATED_AT_LABEL = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+}).format(new Date(__APP_UPDATED_AT__)).replaceAll("/", "-");
 
 function messageId() {
   return randomId();
@@ -675,6 +684,13 @@ export default function Home() {
         </div>
 
         <div className="sidebar-footer">
+          <div
+            className="site-release"
+            aria-label={`当前版本 ${__APP_VERSION__}，更新时间 ${APP_UPDATED_AT_LABEL}`}
+          >
+            <strong>v{__APP_VERSION__}</strong>
+            <time dateTime={__APP_UPDATED_AT__}>更新时间 {APP_UPDATED_AT_LABEL}</time>
+          </div>
           <p>对话保存在本机，个人配置登录后云端同步</p>
           <button onClick={clearLocalData}>清空本地数据</button>
         </div>

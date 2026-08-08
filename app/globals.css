@@ -147,6 +147,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .conversation-actions button:hover { color: #fff; }
 
 .sidebar-footer { border-top: 1px solid rgba(255,255,255,.1); padding: 15px 4px 0; }
+.site-release { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 0 0 11px; color: #8fa099; font: 600 10px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.site-release strong { border: 1px solid rgba(255,255,255,.14); border-radius: 999px; padding: 2px 7px; color: #cbd8d2; font-size: 9px; letter-spacing: .05em; }
+.site-release time { letter-spacing: .015em; }
 .sidebar-footer p { margin: 0 0 8px; color: #8fa099; font-size: 11px; }
 .sidebar-footer button { border: 0; padding: 0; background: transparent; color: #e0a69d; font-size: 12px; }
 

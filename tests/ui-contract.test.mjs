@@ -4,8 +4,11 @@ import test from "node:test";
 
 const pageUrl = new URL("../app/page.tsx", import.meta.url);
 const cssUrl = new URL("../app/globals.css", import.meta.url);
+const buildMetadataTypesUrl = new URL("../app/build-metadata.d.ts", import.meta.url);
 const markdownMessageUrl = new URL("../app/markdown-message.tsx", import.meta.url);
 const markdownRendererUrl = new URL("../app/lib/markdown-render.mjs", import.meta.url);
+const packageUrl = new URL("../package.json", import.meta.url);
+const viteConfigUrl = new URL("../vite.config.ts", import.meta.url);
 
 test("chat workspace exposes the required conversation and request controls", async () => {
   const page = await readFile(pageUrl, "utf8");
@@ -71,6 +74,29 @@ test("responsive styles provide mobile panels and accessible reduced motion", as
   assert.match(css, /\.markdown-code-block pre\s*\{[^}]*overflow-x:\s*auto/);
   assert.match(css, /\.markdown-code-header button/);
   assert.match(css, /--syntax-keyword/);
+});
+
+test("site footer exposes the package version and build update time", async () => {
+  const [page, css, buildMetadataTypes, packageSource, viteConfig] = await Promise.all([
+    readFile(pageUrl, "utf8"),
+    readFile(cssUrl, "utf8"),
+    readFile(buildMetadataTypesUrl, "utf8"),
+    readFile(packageUrl, "utf8"),
+    readFile(viteConfigUrl, "utf8"),
+  ]);
+  const packageMetadata = JSON.parse(packageSource);
+
+  assert.match(packageMetadata.version, /^\d+\.\d+\.\d+$/);
+  assert.match(viteConfig, /import packageMetadata from "\.\/package\.json"/);
+  assert.match(viteConfig, /__APP_VERSION__:\s*JSON\.stringify\(packageMetadata\.version\)/);
+  assert.match(viteConfig, /__APP_UPDATED_AT__:\s*JSON\.stringify\(buildUpdatedAt\)/);
+  assert.match(buildMetadataTypes, /declare const __APP_VERSION__: string/);
+  assert.match(buildMetadataTypes, /declare const __APP_UPDATED_AT__: string/);
+  assert.match(page, /timeZone:\s*"Asia\/Shanghai"/);
+  assert.match(page, /className="site-release"/);
+  assert.match(page, /v\{__APP_VERSION__\}/);
+  assert.match(page, /<time dateTime=\{__APP_UPDATED_AT__\}>更新时间 \{APP_UPDATED_AT_LABEL\}<\/time>/);
+  assert.match(css, /\.site-release\s*\{/);
 });
 
 test("assistant Markdown maps a pure safe structure to JSX without HTML injection", async () => {
