@@ -20,6 +20,19 @@
   --input-bg: #fff;
   --composer-line: #c9c0b0;
   --soft-shadow: rgba(44,37,26,.08);
+  --code-bg: #18211d;
+  --code-header: #202b26;
+  --code-ink: #eef5f1;
+  --code-muted: #a9b9b1;
+  --code-line: #314139;
+  --inline-code-bg: #e9e3d8;
+  --quote-bg: rgba(33,161,121,.07);
+  --syntax-keyword: #ff9aa8;
+  --syntax-string: #9bd7a8;
+  --syntax-number: #f2c477;
+  --syntax-comment: #8fa099;
+  --syntax-title: #8fc8ff;
+  --syntax-variable: #dfb7ff;
 }
 
 html[data-theme="dark"] {
@@ -43,6 +56,19 @@ html[data-theme="dark"] {
   --input-bg: #101512;
   --composer-line: #39453e;
   --soft-shadow: rgba(0,0,0,.28);
+  --code-bg: #080d0b;
+  --code-header: #111a16;
+  --code-ink: #e7f0eb;
+  --code-muted: #8ea097;
+  --code-line: #29362f;
+  --inline-code-bg: #202a25;
+  --quote-bg: rgba(77,204,158,.08);
+  --syntax-keyword: #ff9eae;
+  --syntax-string: #a7dfb1;
+  --syntax-number: #f4c97c;
+  --syntax-comment: #7f9188;
+  --syntax-title: #91caff;
+  --syntax-variable: #e0b6ff;
 }
 
 * { box-sizing: border-box; }
@@ -163,10 +189,73 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 
 .message { margin-bottom: 27px; display: grid; grid-template-columns: 62px minmax(0,1fr); gap: 15px; }
 .message-label { padding-top: 10px; color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .12em; }
-.message-content { overflow-wrap: anywhere; line-height: 1.72; }
+.message-content { min-width: 0; overflow-wrap: anywhere; line-height: 1.72; }
 .message-text { white-space: pre-wrap; }
 .message-user .message-content { justify-self: end; max-width: min(620px, 90%); padding: 13px 16px; border-radius: 16px 16px 4px 16px; background: var(--user-bubble); }
 .message-assistant .message-content { padding: 6px 0; font-family: Georgia, "Times New Roman", serif; font-size: 17px; }
+.markdown-message { min-width: 0; }
+.markdown-message > :first-child { margin-top: 0; }
+.markdown-message > :last-child { margin-bottom: 0; }
+.markdown-message p { margin: .7em 0; }
+.markdown-message h1,
+.markdown-message h2,
+.markdown-message h3,
+.markdown-message h4,
+.markdown-message h5,
+.markdown-message h6 { margin: 1.15em 0 .45em; line-height: 1.25; letter-spacing: -.015em; }
+.markdown-message h1 { font-size: 1.55em; }
+.markdown-message h2 { font-size: 1.35em; }
+.markdown-message h3 { font-size: 1.18em; }
+.markdown-message h4,
+.markdown-message h5,
+.markdown-message h6 { font-size: 1em; }
+.markdown-message ul,
+.markdown-message ol { margin: .7em 0; padding-inline-start: 1.55em; }
+.markdown-message li { margin: .24em 0; padding-inline-start: .18em; }
+.markdown-message li > p { margin: .2em 0; }
+.markdown-message blockquote { margin: .85em 0; border-left: 4px solid var(--accent); padding: .55em .9em; background: var(--quote-bg); color: var(--ink-soft); }
+.markdown-message blockquote > :first-child { margin-top: 0; }
+.markdown-message blockquote > :last-child { margin-bottom: 0; }
+.markdown-message a { color: var(--accent-dark); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.markdown-message a:hover { color: var(--accent); }
+.markdown-message :not(pre) > code { border: 1px solid var(--line); border-radius: 5px; padding: .08em .34em; background: var(--inline-code-bg); font: .88em/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.markdown-message hr { margin: 1.25em 0; border: 0; border-top: 1px solid var(--line); }
+.markdown-table-scroll { max-width: 100%; overflow-x: auto; margin: .9em 0; border: 1px solid var(--line); border-radius: 9px; -webkit-overflow-scrolling: touch; }
+.markdown-table-scroll:focus-visible,
+.markdown-code-block pre:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.markdown-message table { min-width: 100%; border-collapse: collapse; font: .86em/1.5 Aptos, "Segoe UI", sans-serif; }
+.markdown-message th,
+.markdown-message td { min-width: 8.5em; border-bottom: 1px solid var(--line); padding: .58em .72em; vertical-align: top; overflow-wrap: normal; word-break: normal; }
+.markdown-message th { background: var(--paper-strong); color: var(--ink-soft); font-weight: 800; }
+.markdown-message tbody tr:last-child td { border-bottom: 0; }
+.markdown-code-block { max-width: 100%; overflow: hidden; margin: .95em 0; border: 1px solid var(--code-line); border-radius: 10px; background: var(--code-bg); color: var(--code-ink); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.markdown-code-header { display: flex; align-items: center; justify-content: space-between; min-height: 37px; padding: 0 10px 0 13px; border-bottom: 1px solid var(--code-line); background: var(--code-header); color: var(--code-muted); font: 700 10px/1 Aptos, "Segoe UI", sans-serif; letter-spacing: .08em; text-transform: uppercase; }
+.markdown-code-header span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.markdown-code-header button { border: 1px solid var(--code-line); border-radius: 6px; padding: 5px 8px; background: transparent; color: var(--code-ink); font-size: 11px; letter-spacing: 0; text-transform: none; }
+.markdown-code-header button:hover { border-color: var(--accent); color: var(--accent); }
+.markdown-code-block pre { max-width: 100%; margin: 0; overflow-x: auto; padding: 14px 15px 16px; color: inherit; font: 13px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; tab-size: 2; }
+.markdown-code-block code { white-space: pre; overflow-wrap: normal; word-break: normal; }
+.markdown-code-block .hljs-keyword,
+.markdown-code-block .hljs-selector-tag,
+.markdown-code-block .hljs-literal,
+.markdown-code-block .hljs-built_in { color: var(--syntax-keyword); }
+.markdown-code-block .hljs-string,
+.markdown-code-block .hljs-attr,
+.markdown-code-block .hljs-addition { color: var(--syntax-string); }
+.markdown-code-block .hljs-number,
+.markdown-code-block .hljs-symbol,
+.markdown-code-block .hljs-bullet { color: var(--syntax-number); }
+.markdown-code-block .hljs-comment,
+.markdown-code-block .hljs-quote { color: var(--syntax-comment); font-style: italic; }
+.markdown-code-block .hljs-title,
+.markdown-code-block .hljs-section,
+.markdown-code-block .hljs-name { color: var(--syntax-title); }
+.markdown-code-block .hljs-variable,
+.markdown-code-block .hljs-template-variable,
+.markdown-code-block .hljs-params { color: var(--syntax-variable); }
+.markdown-code-block .hljs-deletion { color: var(--danger); }
+.markdown-code-block .hljs-emphasis { font-style: italic; }
+.markdown-code-block .hljs-strong { font-weight: 800; }
 .message-usage { display: flex; flex-wrap: wrap; gap: 7px 12px; align-items: center; margin-top: 11px; color: var(--muted); font: 10px/1.4 Aptos, "Segoe UI", sans-serif; }
 .message-usage span { border: 1px solid var(--line); border-radius: 999px; padding: 3px 7px; color: var(--accent-dark); font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
 .message-usage b { font-weight: 600; }
@@ -295,6 +384,11 @@ html[data-theme="dark"] .save-settings { background: var(--accent-dark); color: 
   .message { grid-template-columns: 1fr; gap: 5px; margin-bottom: 22px; }
   .message-label { padding: 0; }
   .message-user .message-content { max-width: 94%; }
+  .markdown-table-scroll,
+  .markdown-code-block { max-width: calc(100vw - 30px); }
+  .markdown-message th,
+  .markdown-message td { min-width: 4.5em; }
+  .markdown-code-block pre { padding: 12px; font-size: 12px; }
   .waiting-row { margin-left: 0; }
   .composer { padding: 10px 12px 13px; }
   .scroll-follow-control { margin-bottom: 8px; }

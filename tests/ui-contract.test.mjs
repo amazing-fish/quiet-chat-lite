@@ -4,6 +4,8 @@ import test from "node:test";
 
 const pageUrl = new URL("../app/page.tsx", import.meta.url);
 const cssUrl = new URL("../app/globals.css", import.meta.url);
+const markdownMessageUrl = new URL("../app/markdown-message.tsx", import.meta.url);
+const markdownRendererUrl = new URL("../app/lib/markdown-render.mjs", import.meta.url);
 
 test("chat workspace exposes the required conversation and request controls", async () => {
   const page = await readFile(pageUrl, "utf8");
@@ -29,6 +31,8 @@ test("chat workspace exposes the required conversation and request controls", as
   assert.match(page, /模型正在生成/);
   assert.match(page, /Provider Token Usage/);
   assert.match(page, /流式响应/);
+  assert.match(page, /message\.role === "assistant"[\s\S]*?<MarkdownMessage markdown=\{message\.content\}/);
+  assert.match(page, /: <div className="message-text">\{message\.content\}<\/div>/);
   assert.match(page, /返回最新 · 继续跟随/);
   assert.match(page, /onWheel=\{handleMessageWheel\}/);
   assert.match(page, /onTouchMove=\{handleMessageTouchMove\}/);
@@ -58,4 +62,42 @@ test("responsive styles provide mobile panels and accessible reduced motion", as
   assert.match(css, /\.message-usage/);
   assert.match(css, /\.trace-state\.is-streaming/);
   assert.match(css, /\.scroll-follow-control/);
+  assert.match(css, /\.markdown-table-scroll\s*\{[^}]*overflow-x:\s*auto/);
+  assert.match(css, /\.markdown-message td\s*\{[^}]*min-width:\s*8\.5em/);
+  assert.match(
+    css,
+    /@media\s*\(max-width:\s*760px\)[\s\S]*?\.markdown-message th,\s*\.markdown-message td\s*\{[^}]*min-width:\s*4\.5em/,
+  );
+  assert.match(css, /\.markdown-code-block pre\s*\{[^}]*overflow-x:\s*auto/);
+  assert.match(css, /\.markdown-code-header button/);
+  assert.match(css, /--syntax-keyword/);
+});
+
+test("assistant Markdown maps a pure safe structure to JSX without HTML injection", async () => {
+  const [component, renderer] = await Promise.all([
+    readFile(markdownMessageUrl, "utf8"),
+    readFile(markdownRendererUrl, "utf8"),
+  ]);
+
+  assert.match(component, /markdownToRenderTree\(markdown\)/);
+  assert.match(component, /target=\{node\.external \? "_blank"/);
+  assert.match(component, /rel=\{node\.external \? "noopener noreferrer"/);
+  assert.match(component, /const copyState = copyResult\?\.value === node\.value \? copyResult\.state : "idle"/);
+  assert.match(component, /const valueToCopy = node\.value/);
+  assert.match(component, /navigator\.clipboard\.writeText\(valueToCopy\)/);
+  assert.match(component, /setCopyResult\(\{ value: valueToCopy, state: "copied" \}\)/);
+  assert.match(component, /const copyResetTimerRef = useRef<number \| null>\(null\)/);
+  assert.match(component, /window\.clearTimeout\(copyResetTimerRef\.current\)/);
+  assert.match(component, /window\.setTimeout\([\s\S]*?COPY_FEEDBACK_DURATION_MS/);
+  assert.match(component, /const COPY_FEEDBACK_DURATION_MS = 2_000/);
+  assert.match(component, /return \(\) => \{[\s\S]*?window\.clearTimeout\(copyResetTimerRef\.current\)/);
+  assert.match(component, /aria-label=\{copyLabel\}/);
+  assert.doesNotMatch(component, /dangerouslySetInnerHTML/);
+  assert.doesNotMatch(renderer, /PLACEHOLDER_BASE/);
+  assert.match(renderer, /const compact = value\.replace/);
+  assert.match(renderer, /new URL\(compact\)/);
+  assert.match(renderer, /compact\.includes/);
+  assert.doesNotMatch(renderer, /(?:from|require\()["']react/);
+  assert.doesNotMatch(renderer, /\b(?:window|document)\s*\./);
+  assert.doesNotMatch(renderer, /dangerouslySetInnerHTML/);
 });

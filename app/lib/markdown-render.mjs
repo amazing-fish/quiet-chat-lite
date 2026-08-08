@@ -1,0 +1,257 @@
+import { lexer } from "marked";
+import { common, createLowlight } from "lowlight";
+
+const highlighter = createLowlight(common);
+const SAFE_SCHEMES = new Set(["http:", "https:", "mailto:"]);
+const SAFE_HIGHLIGHT_CLASS = /^hljs-[a-z0-9_-]+$/i;
+
+function text(value) {
+  return { type: "text", value: typeof value === "string" ? value : "" };
+}
+
+function fallbackDocument(markdown) {
+  return {
+    type: "document",
+    children: markdown
+      ? [{ type: "paragraph", children: [text(markdown)] }]
+      : [],
+  };
+}
+
+/** Classify links without rewriting the target displayed to the user. */
+export function safeLinkTarget(href) {
+  if (typeof href !== "string") return null;
+
+  const value = href.trim();
+  const compact = value.replace(/[\u0000-\u0020]/g, "");
+  // Browsers normalize backslashes into separators, so reject instead of
+  // silently changing a target such as `/\evil.example` into another URL.
+  if (!compact || compact.includes("\\")) return null;
+
+  try {
+    const resolved = new URL(compact);
+    if (!SAFE_SCHEMES.has(resolved.protocol)) return null;
+    if (resolved.protocol === "mailto:") return { href: value, external: false };
+    if (!resolved.host) return null;
+
+    return { href: value, external: true };
+  } catch {
+    return { href: value, external: compact.startsWith("//") };
+  }
+}
+
+function highlightChildren(children) {
+  const result = [];
+
+  for (const child of Array.isArray(children) ? children : []) {
+    if (child?.type === "text") {
+      result.push({ type: "codeText", value: typeof child.value === "string" ? child.value : "" });
+      continue;
+    }
+
+    if (child?.type !== "element") continue;
+
+    const nested = highlightChildren(child.children);
+    if (child.tagName !== "span") {
+      result.push(...nested);
+      continue;
+    }
+
+    const rawClasses = Array.isArray(child.properties?.className)
+      ? child.properties.className
+      : typeof child.properties?.className === "string"
+        ? child.properties.className.split(/\s+/)
+        : [];
+    const classes = rawClasses.filter(
+      (className) => typeof className === "string" && SAFE_HIGHLIGHT_CLASS.test(className),
+    );
+
+    result.push({ type: "highlightSpan", classes, children: nested });
+  }
+
+  return result;
+}
+
+function codeBlock(token) {
+  const value = typeof token.text === "string" ? token.text : "";
+  const requestedLanguage = typeof token.lang === "string"
+    ? token.lang.trim().split(/\s+/, 1)[0].toLowerCase()
+    : "";
+  const language = requestedLanguage || "text";
+
+  if (!requestedLanguage || !highlighter.registered(requestedLanguage)) {
+    return {
+      type: "codeBlock",
+      language,
+      highlighted: false,
+      value,
+      children: [{ type: "codeText", value }],
+    };
+  }
+
+  try {
+    const highlighted = highlighter.highlight(requestedLanguage, value);
+    return {
+      type: "codeBlock",
+      language,
+      highlighted: true,
+      value,
+      children: highlightChildren(highlighted.children),
+    };
+  } catch {
+    return {
+      type: "codeBlock",
+      language,
+      highlighted: false,
+      value,
+      children: [{ type: "codeText", value }],
+    };
+  }
+}
+
+function inlineTokens(tokens) {
+  const nodes = [];
+
+  for (const token of Array.isArray(tokens) ? tokens : []) {
+    switch (token?.type) {
+      case "text":
+      case "escape":
+        nodes.push(text(token.text));
+        break;
+      case "strong":
+        nodes.push({ type: "strong", children: inlineTokens(token.tokens) });
+        break;
+      case "em":
+        nodes.push({ type: "emphasis", children: inlineTokens(token.tokens) });
+        break;
+      case "del":
+        nodes.push({ type: "strikethrough", children: inlineTokens(token.tokens) });
+        break;
+      case "codespan":
+        nodes.push({ type: "inlineCode", value: typeof token.text === "string" ? token.text : "" });
+        break;
+      case "br":
+        nodes.push({ type: "lineBreak" });
+        break;
+      case "link": {
+        const target = safeLinkTarget(token.href);
+        if (!target) {
+          nodes.push(text(token.raw));
+          break;
+        }
+        nodes.push({
+          type: "link",
+          href: target.href,
+          external: target.external,
+          title: typeof token.title === "string" ? token.title : null,
+          children: inlineTokens(token.tokens),
+        });
+        break;
+      }
+      case "image":
+      case "html":
+        nodes.push(text(token.raw));
+        break;
+      default:
+        nodes.push(text(token?.raw ?? token?.text ?? ""));
+    }
+  }
+
+  return nodes;
+}
+
+function tableCell(cell, fallbackAlign = null) {
+  const align = ["left", "center", "right"].includes(cell?.align)
+    ? cell.align
+    : ["left", "center", "right"].includes(fallbackAlign)
+      ? fallbackAlign
+      : null;
+  return {
+    type: "tableCell",
+    align,
+    children: inlineTokens(cell?.tokens),
+  };
+}
+
+function blockTokens(tokens) {
+  const nodes = [];
+
+  for (const token of Array.isArray(tokens) ? tokens : []) {
+    switch (token?.type) {
+      case "space":
+      case "def":
+        break;
+      case "heading":
+        nodes.push({
+          type: "heading",
+          depth: Math.min(6, Math.max(1, Number(token.depth) || 1)),
+          children: inlineTokens(token.tokens),
+        });
+        break;
+      case "paragraph":
+        nodes.push({ type: "paragraph", children: inlineTokens(token.tokens) });
+        break;
+      case "text":
+        nodes.push({
+          type: "paragraph",
+          children: token.tokens ? inlineTokens(token.tokens) : [text(token.text ?? token.raw)],
+        });
+        break;
+      case "blockquote":
+        nodes.push({ type: "blockquote", children: blockTokens(token.tokens) });
+        break;
+      case "list": {
+        const items = (Array.isArray(token.items) ? token.items : []).map((item) => ({
+          type: "listItem",
+          children: blockTokens(item.tokens),
+        }));
+        if (items.length > 0 && items.every((item) => item.children.length === 0)) {
+          nodes.push({ type: "paragraph", children: [text(token.raw)] });
+          break;
+        }
+        nodes.push({
+          type: "list",
+          ordered: Boolean(token.ordered),
+          start: token.ordered && Number.isFinite(Number(token.start)) ? Number(token.start) : null,
+          children: items,
+        });
+        break;
+      }
+      case "table":
+        nodes.push({
+          type: "table",
+          header: (Array.isArray(token.header) ? token.header : []).map((cell, index) =>
+            tableCell(cell, token.align?.[index])),
+          rows: (Array.isArray(token.rows) ? token.rows : []).map((row) =>
+            (Array.isArray(row) ? row : []).map((cell, index) => tableCell(cell, token.align?.[index]))),
+        });
+        break;
+      case "code":
+        nodes.push(codeBlock(token));
+        break;
+      case "hr":
+        nodes.push({ type: "thematicBreak" });
+        break;
+      case "html":
+        nodes.push({ type: "paragraph", children: [text(token.raw)] });
+        break;
+      default:
+        nodes.push({ type: "paragraph", children: [text(token?.raw ?? token?.text ?? "")] });
+    }
+  }
+
+  return nodes;
+}
+
+export function markdownToRenderTree(markdown) {
+  const source = typeof markdown === "string" ? markdown : "";
+
+  try {
+    return {
+      type: "document",
+      children: blockTokens(lexer(source, { gfm: true, breaks: false, async: false })),
+    };
+  } catch {
+    return fallbackDocument(source);
+  }
+}

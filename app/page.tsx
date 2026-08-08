@@ -22,6 +22,7 @@ import {
 import { readResponseErrorMessage, requestErrorMessage } from "./lib/client-errors.mjs";
 import { requestChatStreamWithFallback } from "./lib/chat-request.mjs";
 import { randomId } from "./lib/id.mjs";
+import { MarkdownMessage } from "./markdown-message";
 import {
   hasIntentionalTouchMove,
   initialConversationScrollTop,
@@ -738,7 +739,9 @@ export default function Home() {
                     {message.role === "user" ? "你" : message.role === "assistant" ? "模型" : "错误"}
                   </div>
                   <div className="message-content">
-                    <div className="message-text">{message.content}</div>
+                    {message.role === "assistant"
+                      ? <MarkdownMessage markdown={message.content} />
+                      : <div className="message-text">{message.content}</div>}
                     {message.role === "assistant" && message.usage && (
                       <div className="message-usage" aria-label="Provider Token Usage">
                         <span>Provider usage</span>
