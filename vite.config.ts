@@ -1,6 +1,7 @@
 import vinext from "vinext";
 import { defineConfig } from "vite";
 import hostingConfig from "./.openai/hosting.json";
+import packageMetadata from "./package.json";
 import { sites } from "./build/sites-vite-plugin";
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
@@ -34,6 +35,8 @@ const localBindingConfig = {
 };
 
 export default defineConfig(async () => {
+  const buildUpdatedAt = new Date().toISOString();
+
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= "false";
@@ -44,6 +47,10 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    define: {
+      __APP_VERSION__: JSON.stringify(packageMetadata.version),
+      __APP_UPDATED_AT__: JSON.stringify(buildUpdatedAt),
+    },
     server: {
       host: "0.0.0.0",
       allowedHosts: ["terminal.local"],
