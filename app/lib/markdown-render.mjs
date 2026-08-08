@@ -2,9 +2,8 @@ import { lexer } from "marked";
 import { common, createLowlight } from "lowlight";
 
 const highlighter = createLowlight(common);
-const SAFE_SCHEMES = new Set(["http", "https", "mailto"]);
-const EXTERNAL_SCHEMES = new Set(["http", "https"]);
-const SCHEME_WHITESPACE = /[\u0000-\u0020\u007f-\u009f]/g;
+const PLACEHOLDER_BASE = new URL("https://internal.invalid");
+const SAFE_SCHEMES = new Set(["http:", "https:", "mailto:"]);
 const SAFE_HIGHLIGHT_CLASS = /^hljs-[a-z0-9_-]+$/i;
 
 function text(value) {
@@ -21,9 +20,8 @@ function fallbackDocument(markdown) {
 }
 
 /**
- * Accept only known-safe absolute schemes plus ordinary relative references.
- * Whitespace/control characters are removed only while checking a possible
- * scheme so values such as `java\nscript:` cannot bypass the allowlist.
+ * Resolve links with the same WHATWG parser the browser uses, then compare the
+ * parsed origin with a fixed placeholder origin for internal/external policy.
  */
 export function safeLinkTarget(href) {
   if (typeof href !== "string") return null;
@@ -34,22 +32,18 @@ export function safeLinkTarget(href) {
   // network-path reference after this function classified them as relative.
   if (!value || value.includes("\\")) return null;
 
-  const compact = value.replace(SCHEME_WHITESPACE, "");
-  if (compact.startsWith("//")) return { href: value, external: true };
+  try {
+    const resolved = new URL(value, PLACEHOLDER_BASE);
+    if (!SAFE_SCHEMES.has(resolved.protocol)) return null;
+    if (resolved.protocol === "mailto:") return { href: value, external: false };
 
-  const colonIndex = compact.indexOf(":");
-  const pathIndex = compact.search(/[/?#]/);
-  const hasScheme = colonIndex > 0 && (pathIndex === -1 || colonIndex < pathIndex);
-
-  if (!hasScheme) return { href: value, external: false };
-
-  const scheme = compact.slice(0, colonIndex).toLowerCase();
-  if (!/^[a-z][a-z0-9+.-]*$/.test(scheme) || !SAFE_SCHEMES.has(scheme)) return null;
-
-  return {
-    href: value,
-    external: EXTERNAL_SCHEMES.has(scheme),
-  };
+    return {
+      href: value,
+      external: resolved.origin !== PLACEHOLDER_BASE.origin,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function highlightChildren(children) {

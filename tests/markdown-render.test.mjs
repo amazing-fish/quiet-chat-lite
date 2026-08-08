@@ -157,6 +157,110 @@ test("uses an allowlist for links including obfuscated dangerous schemes", () =>
   });
 });
 
+test("classifies links by the origin produced by WHATWG URL normalization", () => {
+  const placeholderBase = new URL("https://internal.invalid");
+  const cases = [
+    {
+      href: "/\t/evil.example/path",
+      resolvedHref: "https://evil.example/path",
+      external: true,
+    },
+    {
+      href: "/\n/evil.example/path",
+      resolvedHref: "https://evil.example/path",
+      external: true,
+    },
+    {
+      href: "/\r/evil.example/path",
+      resolvedHref: "https://evil.example/path",
+      external: true,
+    },
+    {
+      href: "/\u0000/evil.example/path",
+      resolvedHref: "https://internal.invalid/%00/evil.example/path",
+      external: false,
+    },
+    {
+      href: "/\u0001/evil.example/path",
+      resolvedHref: "https://internal.invalid/%01/evil.example/path",
+      external: false,
+    },
+    {
+      href: "/\u2028/evil.example/path",
+      resolvedHref: "https://internal.invalid/%E2%80%A8/evil.example/path",
+      external: false,
+    },
+    {
+      href: "/\u3000/evil.example/path",
+      resolvedHref: "https://internal.invalid/%E3%80%80/evil.example/path",
+      external: false,
+    },
+    {
+      href: "/docs/../admin",
+      resolvedHref: "https://internal.invalid/admin",
+      external: false,
+    },
+    {
+      href: "https:example.com/path",
+      resolvedHref: "https://internal.invalid/example.com/path",
+      external: false,
+    },
+    {
+      href: "https:/example.com/path",
+      resolvedHref: "https://internal.invalid/example.com/path",
+      external: false,
+    },
+    {
+      href: "https:////example.com/a/../b",
+      resolvedHref: "https://example.com/b",
+      external: true,
+    },
+    {
+      href: "HTTPS://EXAMPLE.COM:443/a/../b",
+      resolvedHref: "https://example.com/b",
+      external: true,
+    },
+  ];
+
+  for (const { href, resolvedHref, external } of cases) {
+    const resolved = new URL(href, placeholderBase);
+    assert.equal(resolved.href, resolvedHref, `browser normalization: ${JSON.stringify(href)}`);
+    assert.equal(
+      resolved.origin !== placeholderBase.origin,
+      external,
+      `browser origin: ${JSON.stringify(href)}`,
+    );
+    assert.deepEqual(safeLinkTarget(href), { href, external }, href);
+  }
+});
+
+test("rejects backslash inputs even when WHATWG URL would normalize them", () => {
+  const placeholderBase = new URL("https://internal.invalid");
+  const cases = [
+    {
+      href: "/\\\\evil.example/path",
+      resolvedHref: "https://evil.example/path",
+    },
+    {
+      href: "https:\\\\evil.example/path",
+      resolvedHref: "https://evil.example/path",
+    },
+    {
+      href: "folder\\..\\secret",
+      resolvedHref: "https://internal.invalid/secret",
+    },
+  ];
+
+  for (const { href, resolvedHref } of cases) {
+    assert.equal(
+      new URL(href, placeholderBase).href,
+      resolvedHref,
+      `browser normalization: ${JSON.stringify(href)}`,
+    );
+    assert.equal(safeLinkTarget(href), null, href);
+  }
+});
+
 test("renders every streaming prefix without throwing or losing received content", () => {
   const chunks = [
     "# Stream title\n\n",
