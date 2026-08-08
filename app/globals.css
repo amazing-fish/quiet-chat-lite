@@ -386,6 +386,8 @@ html[data-theme="dark"] .save-settings { background: var(--accent-dark); color: 
   .message-user .message-content { max-width: 94%; }
   .markdown-table-scroll,
   .markdown-code-block { max-width: calc(100vw - 30px); }
+  .markdown-message th,
+  .markdown-message td { min-width: 4.5em; }
   .markdown-code-block pre { padding: 12px; font-size: 12px; }
   .waiting-row { margin-left: 0; }
   .composer { padding: 10px 12px 13px; }

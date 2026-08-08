@@ -63,6 +63,11 @@ test("responsive styles provide mobile panels and accessible reduced motion", as
   assert.match(css, /\.trace-state\.is-streaming/);
   assert.match(css, /\.scroll-follow-control/);
   assert.match(css, /\.markdown-table-scroll\s*\{[^}]*overflow-x:\s*auto/);
+  assert.match(css, /\.markdown-message td\s*\{[^}]*min-width:\s*8\.5em/);
+  assert.match(
+    css,
+    /@media\s*\(max-width:\s*760px\)[\s\S]*?\.markdown-message th,\s*\.markdown-message td\s*\{[^}]*min-width:\s*4\.5em/,
+  );
   assert.match(css, /\.markdown-code-block pre\s*\{[^}]*overflow-x:\s*auto/);
   assert.match(css, /\.markdown-code-header button/);
   assert.match(css, /--syntax-keyword/);
