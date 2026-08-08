@@ -2,7 +2,6 @@ import { lexer } from "marked";
 import { common, createLowlight } from "lowlight";
 
 const highlighter = createLowlight(common);
-const PLACEHOLDER_BASE = new URL("https://internal.invalid");
 const SAFE_SCHEMES = new Set(["http:", "https:", "mailto:"]);
 const SAFE_HIGHLIGHT_CLASS = /^hljs-[a-z0-9_-]+$/i;
 
@@ -19,30 +18,25 @@ function fallbackDocument(markdown) {
   };
 }
 
-/**
- * Resolve links with the same WHATWG parser the browser uses, then compare the
- * parsed origin with a fixed placeholder origin for internal/external policy.
- */
+/** Classify links without rewriting the target displayed to the user. */
 export function safeLinkTarget(href) {
   if (typeof href !== "string") return null;
 
   const value = href.trim();
-  // Browsers normalize backslashes while resolving URLs. Rejecting every
-  // backslash prevents mixed forms such as `/\\evil.example` from becoming a
-  // network-path reference after this function classified them as relative.
-  if (!value || value.includes("\\")) return null;
+  const compact = value.replace(/[\u0000-\u0020]/g, "");
+  // Browsers normalize backslashes into separators, so reject instead of
+  // silently changing a target such as `/\evil.example` into another URL.
+  if (!compact || compact.includes("\\")) return null;
 
   try {
-    const resolved = new URL(value, PLACEHOLDER_BASE);
+    const resolved = new URL(compact);
     if (!SAFE_SCHEMES.has(resolved.protocol)) return null;
     if (resolved.protocol === "mailto:") return { href: value, external: false };
+    if (!resolved.host) return null;
 
-    return {
-      href: value,
-      external: resolved.origin !== PLACEHOLDER_BASE.origin,
-    };
+    return { href: value, external: true };
   } catch {
-    return null;
+    return { href: value, external: compact.startsWith("//") };
   }
 }
 

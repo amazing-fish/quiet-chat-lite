@@ -93,10 +93,10 @@ test("assistant Markdown maps a pure safe structure to JSX without HTML injectio
   assert.match(component, /return \(\) => \{[\s\S]*?window\.clearTimeout\(copyResetTimerRef\.current\)/);
   assert.match(component, /aria-label=\{copyLabel\}/);
   assert.doesNotMatch(component, /dangerouslySetInnerHTML/);
-  assert.match(renderer, /const PLACEHOLDER_BASE = new URL\("https:\/\/internal\.invalid"\)/);
-  assert.match(renderer, /const resolved = new URL\(value, PLACEHOLDER_BASE\)/);
-  assert.match(renderer, /resolved\.origin !== PLACEHOLDER_BASE\.origin/);
-  assert.doesNotMatch(renderer, /SCHEME_WHITESPACE|\bcompact\b/);
+  assert.doesNotMatch(renderer, /PLACEHOLDER_BASE/);
+  assert.match(renderer, /const compact = value\.replace/);
+  assert.match(renderer, /new URL\(compact\)/);
+  assert.match(renderer, /compact\.includes/);
   assert.doesNotMatch(renderer, /(?:from|require\()["']react/);
   assert.doesNotMatch(renderer, /\b(?:window|document)\s*\./);
   assert.doesNotMatch(renderer, /dangerouslySetInnerHTML/);

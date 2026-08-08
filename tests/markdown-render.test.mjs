@@ -157,86 +157,119 @@ test("uses an allowlist for links including obfuscated dangerous schemes", () =>
   });
 });
 
-test("classifies links by the origin produced by WHATWG URL normalization", () => {
-  const placeholderBase = new URL("https://internal.invalid");
+test("treats scheme-bearing HTTP URLs as external without a deployment base", () => {
   const cases = [
     {
-      href: "/\t/evil.example/path",
-      resolvedHref: "https://evil.example/path",
-      external: true,
+      href: "https:evil.example",
+      base: "http://app.example/page",
+      resolvedHref: "https://evil.example/",
     },
     {
-      href: "/\n/evil.example/path",
-      resolvedHref: "https://evil.example/path",
-      external: true,
+      href: "http:evil.example",
+      base: "https://app.example/page",
+      resolvedHref: "http://evil.example/",
     },
     {
-      href: "/\r/evil.example/path",
-      resolvedHref: "https://evil.example/path",
-      external: true,
+      href: "https:/evil.example",
+      base: "http://app.example/page",
+      resolvedHref: "https://evil.example/",
     },
     {
-      href: "/\u0000/evil.example/path",
-      resolvedHref: "https://internal.invalid/%00/evil.example/path",
-      external: false,
+      href: "HTTPS:evil.example",
+      base: "http://app.example/page",
+      resolvedHref: "https://evil.example/",
     },
     {
-      href: "/\u0001/evil.example/path",
-      resolvedHref: "https://internal.invalid/%01/evil.example/path",
-      external: false,
+      href: "https:\tevil.example",
+      base: "http://app.example/page",
+      resolvedHref: "https://evil.example/",
     },
     {
-      href: "/\u2028/evil.example/path",
-      resolvedHref: "https://internal.invalid/%E2%80%A8/evil.example/path",
-      external: false,
-    },
-    {
-      href: "/\u3000/evil.example/path",
-      resolvedHref: "https://internal.invalid/%E3%80%80/evil.example/path",
-      external: false,
-    },
-    {
-      href: "/docs/../admin",
-      resolvedHref: "https://internal.invalid/admin",
-      external: false,
+      href: "https:evil.example/path?a=1",
+      base: "http://app.example/page",
+      resolvedHref: "https://evil.example/path?a=1",
     },
     {
       href: "https:example.com/path",
-      resolvedHref: "https://internal.invalid/example.com/path",
-      external: false,
+      base: "http://app.example/page",
+      resolvedHref: "https://example.com/path",
     },
     {
       href: "https:/example.com/path",
-      resolvedHref: "https://internal.invalid/example.com/path",
-      external: false,
-    },
-    {
-      href: "https:////example.com/a/../b",
-      resolvedHref: "https://example.com/b",
-      external: true,
-    },
-    {
-      href: "HTTPS://EXAMPLE.COM:443/a/../b",
-      resolvedHref: "https://example.com/b",
-      external: true,
+      base: "http://app.example/page",
+      resolvedHref: "https://example.com/path",
     },
   ];
 
-  for (const { href, resolvedHref, external } of cases) {
-    const resolved = new URL(href, placeholderBase);
-    assert.equal(resolved.href, resolvedHref, `browser normalization: ${JSON.stringify(href)}`);
+  for (const { href, base, resolvedHref } of cases) {
+    assert.equal(new URL(href, base).href, resolvedHref, `browser navigation: ${JSON.stringify(href)}`);
+    assert.deepEqual(safeLinkTarget(href), { href, external: true }, href);
+  }
+
+  assert.deepEqual(safeLinkTarget("  https:evil.example  "), {
+    href: "https:evil.example",
+    external: true,
+  });
+});
+
+test("uses a compact ASCII-control view only to classify link targets", () => {
+  for (const href of ["/\t/evil.example/path", "/\n/evil.example/path", "/\r/evil.example/path"]) {
     assert.equal(
-      resolved.origin !== placeholderBase.origin,
-      external,
-      `browser origin: ${JSON.stringify(href)}`,
+      new URL(href, "https://app.example/page").href,
+      "https://evil.example/path",
+      `browser navigation: ${JSON.stringify(href)}`,
     );
-    assert.deepEqual(safeLinkTarget(href), { href, external }, href);
+    assert.deepEqual(safeLinkTarget(href), { href, external: true }, href);
+  }
+
+  const dangerous = "\u0001javascript:alert(1)";
+  assert.equal(new URL(dangerous).protocol, "javascript:");
+  assert.equal(safeLinkTarget(dangerous), null);
+});
+
+test("keeps Unicode whitespace and dot-segment paths relative", () => {
+  const cases = [
+    {
+      href: "/\u2028/evil.example/path",
+      resolvedHref: "https://app.example/%E2%80%A8/evil.example/path",
+    },
+    {
+      href: "/\u3000/evil.example/path",
+      resolvedHref: "https://app.example/%E3%80%80/evil.example/path",
+    },
+    {
+      href: "/docs/../admin",
+      resolvedHref: "https://app.example/admin",
+    },
+  ];
+
+  for (const { href, resolvedHref } of cases) {
+    assert.equal(
+      new URL(href, "https://app.example/page").href,
+      resolvedHref,
+      `browser navigation: ${JSON.stringify(href)}`,
+    );
+    assert.deepEqual(safeLinkTarget(href), { href, external: false }, href);
   }
 });
 
-test("rejects backslash inputs even when WHATWG URL would normalize them", () => {
-  const placeholderBase = new URL("https://internal.invalid");
+test("pins single-argument URL handling for empty and minimal HTTP targets", () => {
+  for (const href of ["https:", "http:"]) {
+    assert.throws(() => new URL(href), { name: "TypeError" });
+    assert.deepEqual(safeLinkTarget(href), { href, external: false });
+  }
+
+  const minimalHost = new URL("https:.");
+  assert.equal(minimalHost.host, ".");
+  assert.deepEqual(safeLinkTarget("https:."), { href: "https:.", external: true });
+});
+
+test("rejects rather than rewrites backslash link targets", () => {
   const cases = [
+    {
+      href: "/\\evil.example",
+      resolvedHref: "https://evil.example/",
+    },
     {
       href: "/\\\\evil.example/path",
       resolvedHref: "https://evil.example/path",
@@ -247,13 +280,13 @@ test("rejects backslash inputs even when WHATWG URL would normalize them", () =>
     },
     {
       href: "folder\\..\\secret",
-      resolvedHref: "https://internal.invalid/secret",
+      resolvedHref: "https://app.example/secret",
     },
   ];
 
   for (const { href, resolvedHref } of cases) {
     assert.equal(
-      new URL(href, placeholderBase).href,
+      new URL(href, "https://app.example/page").href,
       resolvedHref,
       `browser normalization: ${JSON.stringify(href)}`,
     );
