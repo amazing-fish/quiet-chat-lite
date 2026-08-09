@@ -96,6 +96,23 @@ test("scroll follow visibility cannot change the composer layout", async () => {
   );
 });
 
+test("scroll following distinguishes layout changes from user movement", async () => {
+  const [page, css] = await Promise.all([
+    readFile(pageUrl, "utf8"),
+    readFile(cssUrl, "utf8"),
+  ]);
+
+  assert.match(css, /\.message-scroll\s*\{[^}]*overflow-anchor:\s*none/);
+  assert.match(page, /const observer = new ResizeObserver/);
+  assert.match(page, /observer\.observe\(container\)/);
+  assert.match(page, /observer\.observe\(messageContent\)/);
+  assert.match(page, /window\.requestAnimationFrame\(scrollToClampedTop\)/);
+  assert.match(
+    page,
+    /function handleMessageWheel[\s\S]*?window\.requestAnimationFrame[\s\S]*?isScrollTowardOlderContent/,
+  );
+});
+
 test("site footer exposes the package version and build update time", async () => {
   const [page, css, buildMetadataTypes, packageSource, viteConfig] = await Promise.all([
     readFile(pageUrl, "utf8"),

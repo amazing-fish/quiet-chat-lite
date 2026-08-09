@@ -181,7 +181,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .connection-dot { width: 8px; height: 8px; border-radius: 50%; background: #c98678; box-shadow: 0 0 0 4px rgba(201,134,120,.12); }
 .connection-dot.is-ready { background: var(--accent); box-shadow: 0 0 0 4px rgba(33,161,121,.14); }
 
-.message-scroll { overflow-y: auto; padding: 38px 28px 24px; }
+.message-scroll { overflow-y: auto; overflow-anchor: none; padding: 38px 28px 24px; }
 .message-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 .messages { width: min(820px, 100%); margin: 0 auto; }
 .empty-state { width: min(650px, 100%); margin: min(14vh, 130px) auto 0; text-align: center; }
