@@ -200,6 +200,32 @@ test("direct fallback runs only after the Site proxy validates an upstream netwo
   assert.equal(directRequest.init.signal.aborted, false);
 });
 
+test("browser fetch implementations keep the global receiver", async () => {
+  const receivers = [];
+  const proxyFetch = function () {
+    receivers.push(this);
+    return Response.json(
+      { error: { code: "upstream_network", message: "无法连接上游。" } },
+      { status: 502 },
+    );
+  };
+  const directFetch = function () {
+    receivers.push(this);
+    return openAiStream([
+      { choices: [{ delta: { content: "调用成功" }, finish_reason: "stop" }] },
+      "[DONE]",
+    ]);
+  };
+
+  const result = await requestChatStreamWithFallback(request, {
+    proxyFetch,
+    directFetch,
+  });
+
+  assert.equal(result.content, "调用成功");
+  assert.deepEqual(receivers, [globalThis, globalThis]);
+});
+
 test("a bare OpenAI-compatible origin uses the standard v1 endpoint", async () => {
   let directUrl;
   await requestChatStreamWithFallback(

@@ -42,6 +42,10 @@ function emitTrace(onTrace, trace) {
   }
 }
 
+function invokeFetch(fetchImpl, input, init) {
+  return Reflect.apply(fetchImpl, globalThis, [input, init]);
+}
+
 function proxyRequestDetails(request) {
   return {
     headers: {
@@ -244,7 +248,7 @@ async function proxyChatStream(request, options, traceContext) {
 
   let response;
   try {
-    response = await options.proxyFetch("/api/chat", {
+    response = await invokeFetch(options.proxyFetch, "/api/chat", {
       method: "POST",
       headers: {
         accept: "text/event-stream",
@@ -380,7 +384,7 @@ async function directChatStream(request, options, traceContext) {
 
   let response;
   try {
-    response = await options.directFetch(url, {
+    response = await invokeFetch(options.directFetch, url, {
       method: "POST",
       headers: {
         authorization: `Bearer ${request.apiKey}`,
