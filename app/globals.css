@@ -153,7 +153,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .sidebar-footer p { margin: 0 0 8px; color: #8fa099; font-size: 11px; }
 .sidebar-footer button { border: 0; padding: 0; background: transparent; color: #e0a69d; font-size: 12px; }
 
-.chat-panel { height: 100dvh; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--paper); }
+.chat-panel { height: 100dvh; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; background: var(--paper); }
 .topbar {
   min-height: 78px; display: flex; align-items: center; gap: 14px; padding: 12px 26px;
   border-bottom: 1px solid var(--line); background: var(--topbar); backdrop-filter: blur(12px);
@@ -271,18 +271,21 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .waiting-row span:nth-child(3) { animation-delay: .28s; margin-right: 5px; }
 @keyframes pulse { 0%, 60%, 100% { opacity: .3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
 
-.composer { padding: 12px 26px 18px; border-top: 1px solid var(--line); background: var(--paper); }
-.scroll-follow-control { width: min(840px, 100%); margin: -2px auto 10px; display: flex; justify-content: center; }
+.composer { position: relative; min-width: 0; padding: 12px 26px 18px; border-top: 1px solid var(--line); background: var(--paper); }
+.scroll-follow-control {
+  position: absolute; z-index: 1; bottom: calc(100% + 8px); left: 50%; width: min(840px, calc(100% - 52px));
+  transform: translateX(-50%); display: flex; justify-content: center; pointer-events: none;
+}
 .scroll-follow-control button {
   display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 999px;
   padding: 7px 12px; background: var(--paper-strong); color: var(--ink-soft); box-shadow: 0 8px 24px var(--soft-shadow);
-  font-size: 12px; font-weight: 800;
+  font-size: 12px; font-weight: 800; pointer-events: auto;
 }
 .scroll-follow-control button:hover { border-color: var(--accent); color: var(--accent-dark); }
 .scroll-follow-control button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .scroll-follow-control span { font-size: 15px; line-height: 1; }
 .composer-box { width: min(840px, 100%); margin: 0 auto; display: flex; align-items: flex-end; gap: 10px; border: 1px solid var(--composer-line); border-radius: 15px; padding: 9px; background: var(--paper-strong); box-shadow: 0 12px 35px var(--soft-shadow); }
-.composer textarea { flex: 1; min-height: 44px; max-height: 160px; resize: vertical; border: 0; padding: 11px 9px; background: transparent; color: var(--ink); line-height: 1.45; }
+.composer textarea { flex: 1; min-width: 0; min-height: 44px; max-height: 160px; resize: vertical; border: 0; padding: 11px 9px; background: transparent; color: var(--ink); line-height: 1.45; }
 .composer textarea:focus { outline: none; }
 .composer textarea::placeholder { color: #969a95; }
 .send-button, .stop-button { min-height: 42px; border: 0; border-radius: 10px; padding: 0 17px; color: #fff; font-weight: 800; }
@@ -394,7 +397,7 @@ html[data-theme="dark"] .save-settings { background: var(--accent-dark); color: 
   .markdown-code-block pre { padding: 12px; font-size: 12px; }
   .waiting-row { margin-left: 0; }
   .composer { padding: 10px 12px 13px; }
-  .scroll-follow-control { margin-bottom: 8px; }
+  .scroll-follow-control { bottom: calc(100% + 4px); width: calc(100% - 24px); }
   .composer-box { border-radius: 13px; }
   .settings-panel { padding: 24px 20px; }
   .request-console { width: 100vw; height: 76dvh; border-radius: 16px 16px 0 0; }
