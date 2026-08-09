@@ -2,6 +2,7 @@ export const BOTTOM_FOLLOW_THRESHOLD = 80;
 export const BOTTOM_RESUME_THRESHOLD = 1;
 export const TOUCH_SCROLL_THRESHOLD = 8;
 export const PROMPT_ANCHOR_OFFSET = 8;
+export const LAYOUT_SHIFT_MATCH_WINDOW_MS = 100;
 
 export function distanceFromBottom({ scrollHeight, scrollTop, clientHeight }) {
   return Math.max(0, scrollHeight - scrollTop - clientHeight);
@@ -41,6 +42,32 @@ export function matchesProgrammaticScroll(scrollTop, targetTop, tolerance = 1) {
   return Number.isFinite(scrollTop)
     && Number.isFinite(targetTop)
     && Math.abs(scrollTop - targetTop) <= tolerance;
+}
+
+export function matchesRecentLayoutShift(
+  scrollTop,
+  layoutShift,
+  now,
+  maxAge = LAYOUT_SHIFT_MATCH_WINDOW_MS,
+) {
+  return layoutShift !== null
+    && Number.isFinite(layoutShift?.observedAt)
+    && Number.isFinite(now)
+    && now >= layoutShift.observedAt
+    && now - layoutShift.observedAt <= maxAge
+    && matchesProgrammaticScroll(scrollTop, layoutShift.scrollTop);
+}
+
+export function isLayoutDrivenScroll(isFollowing, previousMetrics, currentMetrics) {
+  return isFollowing
+    && Number.isFinite(previousMetrics?.scrollHeight)
+    && Number.isFinite(previousMetrics?.clientHeight)
+    && Number.isFinite(currentMetrics?.scrollHeight)
+    && Number.isFinite(currentMetrics?.clientHeight)
+    && (
+      previousMetrics.scrollHeight !== currentMetrics.scrollHeight
+      || previousMetrics.clientHeight !== currentMetrics.clientHeight
+    );
 }
 
 export function isScrollTowardOlderContent(previousScrollTop, scrollTop, tolerance = 1) {

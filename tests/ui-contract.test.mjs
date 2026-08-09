@@ -76,6 +76,43 @@ test("responsive styles provide mobile panels and accessible reduced motion", as
   assert.match(css, /--syntax-keyword/);
 });
 
+test("scroll follow visibility cannot change the composer layout", async () => {
+  const css = await readFile(cssUrl, "utf8");
+
+  assert.match(css, /\.chat-panel\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(css, /\.composer\s*\{[^}]*position:\s*relative/);
+  assert.match(css, /\.composer\s*\{[^}]*min-width:\s*0/);
+  assert.match(css, /\.composer\s*\{[^}]*padding:\s*12px\s+26px\s+18px/);
+  assert.match(css, /\.scroll-follow-control\s*\{[^}]*position:\s*absolute/);
+  assert.match(css, /\.scroll-follow-control\s*\{[^}]*bottom:\s*calc\(100%\s*\+\s*8px\)/);
+  assert.doesNotMatch(css, /\.scroll-follow-control\s*\{[^}]*\btop\s*:/);
+  assert.match(
+    css,
+    /@media\s*\(max-width:\s*760px\)[\s\S]*?\.composer\s*\{[^}]*padding:\s*10px\s+12px\s+13px/,
+  );
+  assert.match(
+    css,
+    /@media\s*\(max-width:\s*760px\)[\s\S]*?\.scroll-follow-control\s*\{[^}]*bottom:\s*calc\(100%\s*\+\s*4px\)/,
+  );
+});
+
+test("scroll following distinguishes layout changes from user movement", async () => {
+  const [page, css] = await Promise.all([
+    readFile(pageUrl, "utf8"),
+    readFile(cssUrl, "utf8"),
+  ]);
+
+  assert.match(css, /\.message-scroll\s*\{[^}]*overflow-anchor:\s*none/);
+  assert.match(page, /const observer = new ResizeObserver/);
+  assert.match(page, /observer\.observe\(container\)/);
+  assert.match(page, /observer\.observe\(messageContent\)/);
+  assert.match(page, /window\.requestAnimationFrame\(scrollToClampedTop\)/);
+  assert.match(
+    page,
+    /function handleMessageWheel[\s\S]*?window\.requestAnimationFrame[\s\S]*?isScrollTowardOlderContent/,
+  );
+});
+
 test("site footer exposes the package version and build update time", async () => {
   const [page, css, buildMetadataTypes, packageSource, viteConfig] = await Promise.all([
     readFile(pageUrl, "utf8"),

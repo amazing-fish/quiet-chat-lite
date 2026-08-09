@@ -26,10 +26,12 @@ import { MarkdownMessage } from "./markdown-message";
 import {
   hasIntentionalTouchMove,
   initialConversationScrollTop,
+  isLayoutDrivenScroll,
   isNearBottom,
   isScrollAwayKey,
   isScrollTowardOlderContent,
   isTouchTowardOlderContent,
+  matchesRecentLayoutShift,
   matchesProgrammaticScroll,
   promptAnchorScrollTop,
   shouldProcessMessageFollowEffect,
@@ -152,11 +154,15 @@ export default function Home() {
   const stoppedByUserRef = useRef(false);
   const lastErrorTraceIdRef = useRef<string | null>(null);
   const messageScrollRef = useRef<HTMLDivElement | null>(null);
+  const messageContentRef = useRef<HTMLDivElement | null>(null);
   const isFollowingRef = useRef(true);
   const userPausedFollowingRef = useRef(false);
   const skipNextStreamFollowRef = useRef(false);
   const programmaticScrollTargetRef = useRef<number | null>(null);
-  const previousScrollTopRef = useRef(0);
+  const programmaticScrollFrameRef = useRef<number | null>(null);
+  const wheelIntentFrameRef = useRef<number | null>(null);
+  const layoutShiftRef = useRef<{ scrollTop: number; observedAt: number } | null>(null);
+  const previousScrollMetricsRef = useRef({ scrollTop: 0, scrollHeight: 0, clientHeight: 0 });
   const touchStartYRef = useRef<number | null>(null);
   const scrollPositionsRef = useRef(new Map<string, number>());
   const previousConversationIdRef = useRef<string | null>(null);
@@ -169,6 +175,7 @@ export default function Home() {
     () => conversations.find((conversation) => conversation.id === activeConversationId) ?? null,
     [activeConversationId, conversations],
   );
+  const activeConversationIsEmpty = activeConversation?.messages.length === 0;
 
   useEffect(() => {
     const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
@@ -230,16 +237,57 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [activeConversationId, conversations, hydrated, settings]);
 
+  useLayoutEffect(() => {
+    const container = messageScrollRef.current;
+    const messageContent = messageContentRef.current;
+    if (!container || !messageContent || typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(() => {
+      layoutShiftRef.current = {
+        scrollTop: container.scrollTop,
+        observedAt: performance.now(),
+      };
+      previousScrollMetricsRef.current = {
+        scrollTop: container.scrollTop,
+        scrollHeight: container.scrollHeight,
+        clientHeight: container.clientHeight,
+      };
+      if (activeConversationId) {
+        scrollPositionsRef.current.set(activeConversationId, container.scrollTop);
+      }
+    });
+    observer.observe(container);
+    observer.observe(messageContent);
+    return () => observer.disconnect();
+  }, [activeConversationId, activeConversationIsEmpty]);
+
+  useEffect(() => () => {
+    if (programmaticScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(programmaticScrollFrameRef.current);
+    }
+    if (wheelIntentFrameRef.current !== null) {
+      window.cancelAnimationFrame(wheelIntentFrameRef.current);
+    }
+  }, []);
+
   const updateFollowing = useCallback((next: boolean) => {
     isFollowingRef.current = next;
     setIsFollowing(next);
   }, []);
 
   const runProgrammaticScroll = useCallback((container: HTMLDivElement, top: number) => {
-    const maxTop = Math.max(0, container.scrollHeight - container.clientHeight);
-    const targetTop = Math.min(maxTop, Math.max(0, top));
-    programmaticScrollTargetRef.current = targetTop;
-    container.scrollTo({ top: targetTop, behavior: "auto" });
+    const scrollToClampedTop = () => {
+      programmaticScrollFrameRef.current = null;
+      const maxTop = Math.max(0, container.scrollHeight - container.clientHeight);
+      const targetTop = Math.min(maxTop, Math.max(0, top));
+      programmaticScrollTargetRef.current = targetTop;
+      container.scrollTo({ top: targetTop, behavior: "auto" });
+    };
+    if (programmaticScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(programmaticScrollFrameRef.current);
+    }
+    scrollToClampedTop();
+    programmaticScrollFrameRef.current = window.requestAnimationFrame(scrollToClampedTop);
   }, []);
 
   const rememberCurrentScrollPosition = useCallback(() => {
@@ -265,7 +313,11 @@ export default function Home() {
       container,
       scrollPositionsRef.current.get(activeConversationId),
     );
-    previousScrollTopRef.current = savedTop;
+    previousScrollMetricsRef.current = {
+      scrollTop: savedTop,
+      scrollHeight: container.scrollHeight,
+      clientHeight: container.clientHeight,
+    };
     runProgrammaticScroll(container, savedTop);
     updateFollowing(isNearBottom({
       scrollHeight: container.scrollHeight,
@@ -376,7 +428,7 @@ export default function Home() {
     setSettingsOpen(false);
     setPromptAnchorMessageId(null);
     userPausedFollowingRef.current = false;
-    previousScrollTopRef.current = 0;
+    previousScrollMetricsRef.current = { scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
     scrollPositionsRef.current.clear();
     updateFollowing(true);
   }
@@ -560,10 +612,27 @@ export default function Home() {
   function handleMessageScroll() {
     const container = messageScrollRef.current;
     if (!container) return;
-    const previousScrollTop = previousScrollTopRef.current;
-    previousScrollTopRef.current = container.scrollTop;
+    const previousScrollMetrics = previousScrollMetricsRef.current;
+    const currentScrollMetrics = {
+      scrollTop: container.scrollTop,
+      scrollHeight: container.scrollHeight,
+      clientHeight: container.clientHeight,
+    };
+    const previousScrollTop = previousScrollMetrics.scrollTop;
+    previousScrollMetricsRef.current = currentScrollMetrics;
     if (activeConversationId) {
       scrollPositionsRef.current.set(activeConversationId, container.scrollTop);
+    }
+    if (isLayoutDrivenScroll(isFollowingRef.current, previousScrollMetrics, currentScrollMetrics)) {
+      layoutShiftRef.current = null;
+      programmaticScrollTargetRef.current = null;
+      return;
+    }
+    const layoutShift = layoutShiftRef.current;
+    layoutShiftRef.current = null;
+    if (matchesRecentLayoutShift(container.scrollTop, layoutShift, performance.now())) {
+      programmaticScrollTargetRef.current = null;
+      return;
     }
     const programmaticTarget = programmaticScrollTargetRef.current;
     if (matchesProgrammaticScroll(container.scrollTop, programmaticTarget)) {
@@ -592,7 +661,20 @@ export default function Home() {
   }
 
   function handleMessageWheel(event: WheelEvent<HTMLDivElement>) {
-    if (event.deltaY < 0) pauseFollowingForUserIntent();
+    if (event.deltaY >= 0) return;
+    const container = messageScrollRef.current;
+    if (!container) return;
+    const wheelStartScrollTop = container.scrollTop;
+    if (wheelIntentFrameRef.current !== null) {
+      window.cancelAnimationFrame(wheelIntentFrameRef.current);
+    }
+    wheelIntentFrameRef.current = window.requestAnimationFrame(() => {
+      wheelIntentFrameRef.current = null;
+      if (messageScrollRef.current !== container) return;
+      if (isScrollTowardOlderContent(wheelStartScrollTop, container.scrollTop)) {
+        pauseFollowingForUserIntent();
+      }
+    });
   }
 
   function handleMessageTouchStart(event: TouchEvent<HTMLDivElement>) {
@@ -737,14 +819,14 @@ export default function Home() {
           onKeyDown={handleMessageKeyDown}
         >
           {activeConversation && activeConversation.messages.length === 0 ? (
-            <div className="empty-state">
+            <div ref={messageContentRef} className="empty-state">
               <span className="eyebrow">READY WHEN YOU ARE</span>
               <h2>从一句话开始。</h2>
               <p>填写模型连接后，在这里进行简单、连续的多轮对话。</p>
               {!settingsReady && <button onClick={() => setSettingsOpen(true)}>完成模型连接设置</button>}
             </div>
           ) : (
-            <div className="messages">
+            <div ref={messageContentRef} className="messages">
               {activeConversation?.messages.map((message) => (
                 <article
                   key={message.id}

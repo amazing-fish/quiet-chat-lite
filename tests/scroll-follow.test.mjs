@@ -6,10 +6,12 @@ import {
   distanceFromBottom,
   hasIntentionalTouchMove,
   initialConversationScrollTop,
+  isLayoutDrivenScroll,
   isNearBottom,
   isScrollAwayKey,
   isScrollTowardOlderContent,
   isTouchTowardOlderContent,
+  matchesRecentLayoutShift,
   matchesProgrammaticScroll,
   promptAnchorScrollTop,
   shouldProcessMessageFollowEffect,
@@ -95,6 +97,26 @@ test("only the exact programmatic target is suppressed", () => {
   assert.equal(matchesProgrammaticScroll(960, 960), true);
   assert.equal(matchesProgrammaticScroll(959.5, 960), true);
   assert.equal(matchesProgrammaticScroll(900, 960), false);
+});
+
+test("only the immediate scroll event at a layout-shift position is suppressed", () => {
+  const layoutShift = { scrollTop: 922, observedAt: 1_000 };
+
+  assert.equal(matchesRecentLayoutShift(922, layoutShift, 1_050), true);
+  assert.equal(matchesRecentLayoutShift(920, layoutShift, 1_050), false);
+  assert.equal(matchesRecentLayoutShift(922, layoutShift, 1_101), false);
+});
+
+test("viewport clamping while following is treated as layout, not user intent", () => {
+  const previousMetrics = { scrollTop: 960, scrollHeight: 1600, clientHeight: 640 };
+  const resizedMetrics = { scrollTop: 900, scrollHeight: 1600, clientHeight: 700 };
+
+  assert.equal(isLayoutDrivenScroll(true, previousMetrics, resizedMetrics), true);
+  assert.equal(isLayoutDrivenScroll(false, previousMetrics, resizedMetrics), false);
+  assert.equal(isLayoutDrivenScroll(true, previousMetrics, {
+    ...previousMetrics,
+    scrollTop: 900,
+  }), false);
 });
 
 test("scrollbar movement toward older content is treated as user intent", () => {
